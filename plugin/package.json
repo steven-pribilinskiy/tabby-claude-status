@@ -1,0 +1,48 @@
+{
+  "name": "tabby-claude-status",
+  "version": "1.1.0",
+  "description": "Visual tab color indicators for Claude Code status in Tabby terminal",
+  "keywords": [
+    "tabby-plugin",
+    "claude",
+    "claude-code",
+    "terminal",
+    "status"
+  ],
+  "author": "steve",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/",
+    "hook.js"
+  ],
+  "scripts": {
+    "build": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "install-plugin": "npm run build && node scripts/install-plugin.js"
+  },
+  "peerDependencies": {
+    "@angular/common": ">=15.0.0",
+    "@angular/core": ">=15.0.0",
+    "@angular/forms": ">=15.0.0",
+    "rxjs": "^7.0.0",
+    "tabby-core": "*",
+    "tabby-terminal": "*",
+    "tabby-settings": "*"
+  },
+  "devDependencies": {
+    "@angular/common": "^15.2.0",
+    "@angular/core": "^15.2.0",
+    "@angular/forms": "^15.2.0",
+    "@types/node": "^20.0.0",
+    "rxjs": "^7.8.0",
+    "tabby-core": "^1.0.163",
+    "tabby-settings": "^1.0.163",
+    "tabby-terminal": "^1.0.163",
+    "ts-loader": "^9.5.0",
+    "typescript": "~4.9.0",
+    "webpack": "^5.90.0",
+    "webpack-cli": "^5.1.0"
+  }
+}
