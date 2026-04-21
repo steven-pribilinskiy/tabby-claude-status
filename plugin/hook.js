@@ -143,6 +143,9 @@ process.stdin.on('end', () => {
         }
         if (event.tool_name) status.tool = event.tool_name
         if (event.notification_type) status.type = event.notification_type
+        // `cwd` is sent in the hook payload by Claude Code; capture it so the
+        // plugin can spawn a restored tab in the same directory later.
+        if (event.cwd) status.cwd = event.cwd
         fs.writeFileSync(STATUS_FILE, JSON.stringify(status))
 
         // Fire-and-forget seed to windows-settings so the server's

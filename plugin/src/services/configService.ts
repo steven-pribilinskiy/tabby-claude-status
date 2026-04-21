@@ -1,6 +1,16 @@
 import { Injectable } from '@angular/core'
 import { ConfigService } from 'tabby-core'
-import { ClaudeStatusAudioConfig, ClaudeStatusConfig, DEFAULT_AUDIO_CONFIG, DEFAULT_CONFIG } from '../interfaces/types'
+import {
+    ClaudeSessionRestoreConfig,
+    ClaudeStatusAudioConfig,
+    ClaudeStatusConfig,
+    ClaudeStatusDisplayConfig,
+    DEFAULT_AUDIO_CONFIG,
+    DEFAULT_CONFIG,
+    DEFAULT_DISPLAY_CONFIG,
+    DEFAULT_EMOJI_MAP,
+    DEFAULT_SESSION_RESTORE_CONFIG,
+} from '../interfaces/types'
 
 /**
  * Service for accessing Claude status plugin configuration
@@ -21,6 +31,7 @@ export class ClaudeStatusConfigService {
                 ...DEFAULT_CONFIG.colors,
                 ...(stored.colors || {}),
             },
+            display: this.getDisplayConfig(),
         }
     }
 
@@ -70,6 +81,36 @@ export class ClaudeStatusConfigService {
             statusTexts: {
                 ...DEFAULT_AUDIO_CONFIG.statusTexts,
                 ...(stored.statusTexts || {}),
+            },
+            voicesByBackend: {
+                ...(DEFAULT_AUDIO_CONFIG.voicesByBackend || {}),
+                ...(stored.voicesByBackend || {}),
+            },
+        }
+    }
+
+    /**
+     * Get session-restore configuration with deep-merge of defaults.
+     */
+    getSessionRestoreConfig(): ClaudeSessionRestoreConfig {
+        const stored = this.config.store.claudeStatus?.sessionRestore || {}
+        return {
+            ...DEFAULT_SESSION_RESTORE_CONFIG,
+            ...stored,
+        }
+    }
+
+    /**
+     * Get display-surface configuration with deep-merge of defaults.
+     */
+    getDisplayConfig(): ClaudeStatusDisplayConfig {
+        const stored = this.config.store.claudeStatus?.display || {}
+        return {
+            ...DEFAULT_DISPLAY_CONFIG,
+            ...stored,
+            titleEmojiMap: {
+                ...DEFAULT_EMOJI_MAP,
+                ...(stored.titleEmojiMap || {}),
             },
         }
     }

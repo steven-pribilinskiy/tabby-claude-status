@@ -1,7 +1,19 @@
 import { Component, OnInit } from '@angular/core'
 import { ConfigService } from 'tabby-core'
 import { AudioService } from '../services/audioService'
-import { DEFAULT_AUDIO_CONFIG, DEFAULT_CONFIG } from '../interfaces/types'
+import {
+    ClaudeSessionRecord,
+    DEFAULT_AUDIO_CONFIG,
+    DEFAULT_CONFIG,
+    DEFAULT_DISPLAY_CONFIG,
+    DEFAULT_EMOJI_MAP,
+    DEFAULT_SESSION_RESTORE_CONFIG,
+    TtsBackendId,
+} from '../interfaces/types'
+import { TtsBackend, TtsVoice } from '../services/tts/tts.interface'
+import { SessionRestoreService } from '../services/sessionRestoreService'
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const PLUGIN_PACKAGE = require('../../package.json') as { version: string; homepage?: string }
 
 import * as fs from 'fs'
 import * as os from 'os'
@@ -15,10 +27,26 @@ const HOOK_EVENTS = [
     'SessionStart', 'SessionEnd',
 ]
 
+interface BackendOption {
+    id: TtsBackendId
+    label: string
+    available: boolean | null  // null = still probing
+    voices: TtsVoice[]
+}
+
 @Component({
     template: `
         <div class="container-fluid">
-            <h3>Claude Status</h3>
+            <div class="d-flex align-items-baseline gap-2 mb-2">
+                <h3 class="mb-0">Claude Status</h3>
+                <span class="badge text-bg-secondary">v{{pluginVersion}}</span>
+                <a *ngIf="pluginHomepage"
+                   class="small text-muted ms-2"
+                   [attr.href]="pluginHomepage"
+                   (click)="openHomepage($event)">
+                    {{pluginHomepage}}
+                </a>
+            </div>
 
             <!-- Enable plugin -->
             <div class="form-group mb-3">
@@ -68,6 +96,76 @@ const HOOK_EVENTS = [
 
             <hr />
 
+            <!-- Display surfaces -->
+            <h5>Display surfaces</h5>
+            <p class="text-muted small">
+                Each surface updates independently when Claude status changes.
+                Leave off the ones you don't want.
+            </p>
+
+            <div class="form-group mb-2">
+                <toggle
+                    [(ngModel)]="config.store.claudeStatus.display.colorBorder"
+                    (ngModelChange)="save()"
+                ></toggle>
+                <label class="ms-2">Tab bottom border colour</label>
+            </div>
+
+            <div class="form-group mb-2">
+                <toggle
+                    [(ngModel)]="config.store.claudeStatus.display.titleEmoji"
+                    (ngModelChange)="save()"
+                ></toggle>
+                <label class="ms-2">Tab title emoji prefix</label>
+            </div>
+
+            <div *ngIf="config.store.claudeStatus.display.titleEmoji" class="row mb-2 ms-3" style="max-width: 560px">
+                <div class="col-4 mb-1" *ngFor="let status of emojiStatuses">
+                    <label class="form-label text-capitalize small mb-1">{{status}}</label>
+                    <input
+                        type="text"
+                        class="form-control form-control-sm"
+                        [ngModel]="getEmoji(status)"
+                        (ngModelChange)="setEmoji(status, $event)"
+                        maxlength="4"
+                    />
+                </div>
+            </div>
+
+            <div class="form-group mb-2">
+                <toggle
+                    [(ngModel)]="config.store.claudeStatus.display.progressBar"
+                    (ngModelChange)="save()"
+                ></toggle>
+                <label class="ms-2">Indeterminate progress bar while <em>working</em></label>
+            </div>
+
+            <div class="form-group mb-2">
+                <toggle
+                    [(ngModel)]="config.store.claudeStatus.display.activityMarker"
+                    (ngModelChange)="save()"
+                ></toggle>
+                <label class="ms-2">Activity marker dot on <em>question</em> / <em>error</em></label>
+            </div>
+
+            <div class="form-group mb-2">
+                <toggle
+                    [(ngModel)]="config.store.claudeStatus.display.taskbarFlash"
+                    (ngModelChange)="save()"
+                ></toggle>
+                <label class="ms-2">Flash taskbar when Tabby is unfocused</label>
+            </div>
+
+            <div class="form-group mb-3">
+                <toggle
+                    [(ngModel)]="config.store.claudeStatus.display.taskbarOverlay"
+                    (ngModelChange)="save()"
+                ></toggle>
+                <label class="ms-2">Taskbar icon overlay per status</label>
+            </div>
+
+            <hr />
+
             <!-- Audio / TTS -->
             <h5>Audio / TTS</h5>
 
@@ -81,16 +179,56 @@ const HOOK_EVENTS = [
 
             <div *ngIf="config.store.claudeStatus.audio.enabled">
                 <div class="form-group mb-3">
+                    <label class="form-label">TTS backend</label>
+                    <select
+                        class="form-control"
+                        style="max-width: 360px"
+                        [ngModel]="config.store.claudeStatus.audio.backend"
+                        (ngModelChange)="onBackendChange($event)"
+                    >
+                        <option *ngFor="let b of backends" [value]="b.id">
+                            {{b.label}}
+                            <ng-container *ngIf="b.available === true">&nbsp;✓</ng-container>
+                            <ng-container *ngIf="b.available === false">&nbsp;✗</ng-container>
+                        </option>
+                    </select>
+                    <div class="form-text">
+                        Web Speech is always available and is the fallback if the selected backend fails.
+                    </div>
+                </div>
+
+                <div class="form-group mb-3">
                     <label class="form-label">Voice</label>
                     <select
                         class="form-control"
-                        style="max-width: 300px"
-                        [(ngModel)]="config.store.claudeStatus.audio.voiceName"
-                        (ngModelChange)="save()"
+                        style="max-width: 500px"
+                        [ngModel]="getSelectedVoiceId()"
+                        (ngModelChange)="onVoiceChange($event)"
                     >
-                        <option value="">System Default</option>
-                        <option *ngFor="let v of voices" [value]="v.name">{{v.name}} ({{v.lang}})</option>
+                        <option value="">(default for this backend)</option>
+                        <option *ngFor="let v of currentVoices" [value]="v.id">{{v.label}}</option>
                     </select>
+                    <div *ngIf="voicesLoading" class="form-text text-muted">Loading voices…</div>
+                    <div *ngIf="!voicesLoading && currentVoices.length === 0" class="form-text text-warning">
+                        No voices available for this backend. Check availability indicator above.
+                    </div>
+                </div>
+
+                <div *ngIf="currentBackend?.id === 'piper'" class="row mb-3">
+                    <div class="col-6">
+                        <label class="form-label">Piper executable</label>
+                        <input type="text" class="form-control"
+                            [(ngModel)]="config.store.claudeStatus.audio.piperExePath"
+                            (ngModelChange)="save()"
+                            placeholder="C:\\tools\\piper\\piper.exe" />
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Piper model (.onnx)</label>
+                        <input type="text" class="form-control"
+                            [(ngModel)]="config.store.claudeStatus.audio.piperModelPath"
+                            (ngModelChange)="save()"
+                            placeholder="C:\\tools\\piper\\en_US-lessac-medium.onnx" />
+                    </div>
                 </div>
 
                 <div class="row mb-3">
@@ -142,6 +280,100 @@ const HOOK_EVENTS = [
 
             <hr />
 
+            <!-- Session restore -->
+            <h5>Session restore</h5>
+            <p class="text-muted small">
+                Persist each Claude Code session (cwd + session id) so you can
+                reopen them after closing Tabby. Opt-in — nothing is written
+                to disk until this is enabled.
+            </p>
+
+            <div class="form-group mb-2">
+                <toggle
+                    [(ngModel)]="config.store.claudeStatus.sessionRestore.enabled"
+                    (ngModelChange)="save()"
+                ></toggle>
+                <label class="ms-2">Enable session tracking</label>
+            </div>
+
+            <div *ngIf="config.store.claudeStatus.sessionRestore.enabled">
+                <div class="form-group mb-2 ms-3">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.sessionRestore.autoResumeOnLaunch"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="ms-2">
+                        Auto-resume all saved sessions on Tabby launch
+                    </label>
+                </div>
+
+                <div class="row mb-3 ms-3">
+                    <div class="col-4">
+                        <label class="form-label">Retention (days)</label>
+                        <input
+                            type="number"
+                            class="form-control form-control-sm"
+                            min="1" max="90" step="1"
+                            [(ngModel)]="config.store.claudeStatus.sessionRestore.retentionDays"
+                            (ngModelChange)="save()"
+                        />
+                    </div>
+                    <div class="col-8">
+                        <label class="form-label">Extra args (appended to <code>claude --resume &lt;id&gt;</code>)</label>
+                        <input
+                            type="text"
+                            class="form-control form-control-sm"
+                            placeholder="e.g. --model opus"
+                            [(ngModel)]="config.store.claudeStatus.sessionRestore.extraArgs"
+                            (ngModelChange)="save()"
+                        />
+                    </div>
+                </div>
+
+                <div class="d-flex align-items-center gap-2 mb-2 ms-3">
+                    <button class="btn btn-sm btn-outline-primary" (click)="resumeAllSessions()">
+                        Resume all now
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" (click)="refreshSessions()">
+                        Refresh list
+                    </button>
+                    <span class="text-muted small">{{sessions.length}} saved session(s)</span>
+                </div>
+
+                <table *ngIf="sessions.length > 0" class="table table-sm ms-3" style="max-width: 900px">
+                    <thead>
+                        <tr>
+                            <th style="width: 42%">Working directory</th>
+                            <th>Session id</th>
+                            <th>Last seen</th>
+                            <th style="width: 140px"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr *ngFor="let s of sessions">
+                            <td>
+                                <code class="small">{{s.cwd}}</code>
+                                <div *ngIf="s.title" class="text-muted small">{{s.title}}</div>
+                            </td>
+                            <td><code class="small">{{s.sessionId}}</code></td>
+                            <td class="small">{{formatTs(s.lastSeen)}}</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-success"
+                                        (click)="resumeSession(s)">Resume</button>
+                                <button class="btn btn-sm btn-outline-danger ms-1"
+                                        (click)="forgetSession(s)">✕</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div *ngIf="sessions.length === 0" class="ms-3 text-muted small">
+                    No sessions recorded yet. Run <code>claude</code> in any Tabby tab — this list populates as hook events fire.
+                </div>
+            </div>
+
+            <hr />
+
             <!-- Hook Setup -->
             <h5>Claude Code Hook Setup</h5>
             <p class="text-muted small">
@@ -164,6 +396,10 @@ const HOOK_EVENTS = [
             <h5>Diagnostics</h5>
             <table class="table table-sm table-borderless" style="max-width: 600px">
                 <tbody>
+                    <tr>
+                        <td class="text-muted" style="width: 120px">Plugin version</td>
+                        <td><code>{{pluginVersion}}</code></td>
+                    </tr>
                     <tr>
                         <td class="text-muted" style="width: 120px">Platform</td>
                         <td><code>{{osInfo.platform}} {{osInfo.arch}}</code></td>
@@ -224,8 +460,14 @@ const HOOK_EVENTS = [
 export class ClaudeStatusSettingsTabComponent implements OnInit {
     colorStatuses = ['working', 'question', 'done', 'error'] as const
     phraseStatuses = ['done', 'question', 'error', 'working', 'idle'] as const
-    voices: SpeechSynthesisVoice[] = []
+    emojiStatuses = ['working', 'question', 'done', 'error', 'idle'] as const
     hooksStatus: 'ok' | 'missing' | 'error' | '' = ''
+
+    backends: BackendOption[] = []
+    voicesLoading = false
+    pluginVersion = PLUGIN_PACKAGE.version
+    pluginHomepage = PLUGIN_PACKAGE.homepage || ''
+    sessions: ClaudeSessionRecord[] = []
 
     nodeInfo: { path: string | null; version: string | null; error: string | null } = {
         path: null, version: null, error: null,
@@ -242,6 +484,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
     constructor(
         public config: ConfigService,
         private audioService: AudioService,
+        private sessionRestore: SessionRestoreService,
     ) {}
 
     ngOnInit(): void {
@@ -258,12 +501,37 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
         if (!this.config.store.claudeStatus.audio.statusTexts) {
             this.config.store.claudeStatus.audio.statusTexts = { ...DEFAULT_AUDIO_CONFIG.statusTexts }
         }
+        if (!this.config.store.claudeStatus.audio.voicesByBackend) {
+            this.config.store.claudeStatus.audio.voicesByBackend = {}
+        }
+        if (!this.config.store.claudeStatus.audio.backend) {
+            this.config.store.claudeStatus.audio.backend = DEFAULT_AUDIO_CONFIG.backend
+        }
+        if (!this.config.store.claudeStatus.display) {
+            this.config.store.claudeStatus.display = { ...DEFAULT_DISPLAY_CONFIG }
+        }
+        if (!this.config.store.claudeStatus.display.titleEmojiMap) {
+            this.config.store.claudeStatus.display.titleEmojiMap = { ...DEFAULT_EMOJI_MAP }
+        }
+        if (!this.config.store.claudeStatus.sessionRestore) {
+            this.config.store.claudeStatus.sessionRestore = { ...DEFAULT_SESSION_RESTORE_CONFIG }
+        }
+        this.refreshSessions()
 
-        // Load voices (may need a small delay for browser to populate)
-        this.voices = this.audioService.getVoices()
-        if (this.voices.length === 0 && typeof window !== 'undefined' && window.speechSynthesis) {
+        // Seed backend list (availability + voice probes are kicked off async)
+        this.backends = this.audioService.listAllBackends().map(b => ({
+            id: b.id,
+            label: b.label,
+            available: null,
+            voices: [],
+        }))
+        for (const entry of this.backends) this.probeBackend(entry)
+
+        // Handle Web Speech's late-loading voice list
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
             window.speechSynthesis.onvoiceschanged = () => {
-                this.voices = this.audioService.getVoices()
+                const ws = this.backends.find(b => b.id === 'webspeech')
+                if (ws) this.probeBackend(ws)
             }
         }
 
@@ -275,6 +543,34 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
         this.checkHooks()
     }
 
+    private async probeBackend(entry: BackendOption): Promise<void> {
+        const backend = this.audioService.getBackend(entry.id)
+        try {
+            entry.available = await backend.isAvailable()
+        } catch {
+            entry.available = false
+        }
+        if (entry.available) {
+            try {
+                entry.voices = await backend.listVoices()
+            } catch {
+                entry.voices = []
+            }
+        }
+        if (this.currentBackend?.id === entry.id) {
+            this.voicesLoading = false
+        }
+    }
+
+    get currentBackend(): BackendOption | undefined {
+        const id = this.config.store.claudeStatus?.audio?.backend as TtsBackendId
+        return this.backends.find(b => b.id === id)
+    }
+
+    get currentVoices(): TtsVoice[] {
+        return this.currentBackend?.voices || []
+    }
+
     getColor(status: string): string {
         return this.config.store.claudeStatus.colors[status] || (DEFAULT_CONFIG.colors as any)[status]
     }
@@ -284,8 +580,57 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
         this.save()
     }
 
+    getEmoji(status: string): string {
+        return this.config.store.claudeStatus.display.titleEmojiMap?.[status] ?? (DEFAULT_EMOJI_MAP as any)[status]
+    }
+
+    setEmoji(status: string, value: string): void {
+        if (!this.config.store.claudeStatus.display.titleEmojiMap) {
+            this.config.store.claudeStatus.display.titleEmojiMap = { ...DEFAULT_EMOJI_MAP }
+        }
+        this.config.store.claudeStatus.display.titleEmojiMap[status] = value
+        this.save()
+    }
+
+    getSelectedVoiceId(): string {
+        const backendId = this.config.store.claudeStatus?.audio?.backend as TtsBackendId
+        return this.config.store.claudeStatus?.audio?.voicesByBackend?.[backendId] || ''
+    }
+
+    onVoiceChange(voiceId: string): void {
+        const backendId = this.config.store.claudeStatus.audio.backend as TtsBackendId
+        if (!this.config.store.claudeStatus.audio.voicesByBackend) {
+            this.config.store.claudeStatus.audio.voicesByBackend = {}
+        }
+        this.config.store.claudeStatus.audio.voicesByBackend[backendId] = voiceId
+        // Keep legacy field in sync for Web Speech so old code paths don't regress.
+        if (backendId === 'webspeech') {
+            this.config.store.claudeStatus.audio.voiceName = voiceId
+        }
+        this.save()
+    }
+
+    onBackendChange(backendId: TtsBackendId): void {
+        this.config.store.claudeStatus.audio.backend = backendId
+        this.save()
+        this.voicesLoading = !this.currentBackend?.voices?.length
+    }
+
     save(): void {
         this.config.save()
+    }
+
+    openHomepage(event: MouseEvent): void {
+        event.preventDefault()
+        if (!this.pluginHomepage) return
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { shell } = require('electron')
+            shell.openExternal(this.pluginHomepage)
+        } catch {
+            // fall back to window.open if electron isn't reachable
+            if (typeof window !== 'undefined') window.open(this.pluginHomepage, '_blank')
+        }
     }
 
     testSpeak(status: string): void {
@@ -294,6 +639,31 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
         if (text) {
             this.audioService.speakText(text, audio)
         }
+    }
+
+    // ── Session restore ─────────────────────────────────────────────
+
+    refreshSessions(): void {
+        this.sessions = this.sessionRestore.list()
+    }
+
+    async resumeSession(session: ClaudeSessionRecord): Promise<void> {
+        await this.sessionRestore.resumeSession(session)
+    }
+
+    async resumeAllSessions(): Promise<void> {
+        await this.sessionRestore.resumeAll()
+    }
+
+    forgetSession(session: ClaudeSessionRecord): void {
+        this.sessionRestore.forget(session.sessionId)
+        this.refreshSessions()
+    }
+
+    formatTs(ts: number): string {
+        if (!ts) return '—'
+        const d = new Date(ts)
+        return d.toLocaleString()
     }
 
     // ── Node.js detection ────────────────────────────────────────────

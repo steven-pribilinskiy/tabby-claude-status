@@ -4,13 +4,33 @@ import { TerminalDecorator, BaseTerminalTabComponent } from 'tabby-terminal'
 import { StatusParserService } from '../services/statusParserService'
 import { ClaudeStatusConfigService } from '../services/configService'
 import { AudioService } from '../services/audioService'
-import { ClaudeStatusName, ClaudeStatusEvent, HOOK_EVENT_STATUS_MAP } from '../interfaces/types'
+import { SessionRestoreService } from '../services/sessionRestoreService'
+import {
+    ClaudeStatusName,
+    ClaudeStatusEvent,
+    HOOK_EVENT_STATUS_MAP,
+    ClaudeStatusDisplayConfig,
+} from '../interfaces/types'
 
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
 const STATUS_FILE = path.join(os.tmpdir(), 'tabby-claude-status.json')
+
+/** Lazy handle to the current Electron BrowserWindow via @electron/remote. */
+let cachedBrowserWindow: any | null = null
+function getBrowserWindow(): any | null {
+    if (cachedBrowserWindow) return cachedBrowserWindow
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const remote = require('@electron/remote')
+        cachedBrowserWindow = remote.getCurrentWindow()
+        return cachedBrowserWindow
+    } catch {
+        return null
+    }
+}
 
 @Injectable()
 export class ClaudeStatusDecorator extends TerminalDecorator {
@@ -23,14 +43,30 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
     private pollInterval: ReturnType<typeof setInterval> | null = null
     private lastFileTs = 0
 
+    // Display-surface bookkeeping per terminal
+    private baseTitles: Map<BaseTerminalTabComponent, string> = new Map()
+    private progressIntervals: Map<BaseTerminalTabComponent, ReturnType<typeof setInterval>> = new Map()
+
     constructor(
         private parser: StatusParserService,
         private configService: ClaudeStatusConfigService,
         private audioService: AudioService,
+        private sessionRestore: SessionRestoreService,
         private app: AppService,
     ) {
         super()
         this.configService.debug('ClaudeStatusDecorator initialized')
+
+        // Auto-resume on launch. Deferred so Tabby has time to finish its own
+        // tab restoration (if any) before we pile on more tabs.
+        const restoreCfg = this.configService.getSessionRestoreConfig()
+        if (restoreCfg.enabled && restoreCfg.autoResumeOnLaunch) {
+            setTimeout(() => {
+                this.sessionRestore.resumeAll().then(n => {
+                    if (n > 0) this.configService.debug(`Auto-resumed ${n} Claude sessions`)
+                })
+            }, 1500)
+        }
 
         if (this.configService.clearOnFocus) {
             this.app.activeTabChange$.subscribe(tab => {
@@ -65,6 +101,8 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
 
     detach(terminal: BaseTerminalTabComponent): void {
         this.clearResetTimer(terminal)
+        this.stopProgressAnimation(terminal)
+        this.restoreTitle(terminal)
         this.currentStatus.delete(terminal)
         this.terminalPids.delete(terminal)
         this.terminals.delete(terminal)
@@ -166,6 +204,13 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 metadata: data,
             }
 
+            // Record the session for opt-in restore. No-op when disabled.
+            if (data.session && data.cwd) {
+                const terminal = this.findTerminalForEvent(data)
+                const title = terminal ? (terminal as any).title : undefined
+                this.sessionRestore.record(data.session, data.cwd, title)
+            }
+
             // Find the right terminal for this event
             const terminal = this.findTerminalForEvent(data)
             if (terminal) {
@@ -246,8 +291,35 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         this.clearResetTimer(terminal)
         this.currentStatus.set(terminal, event.status)
 
+        const display = this.configService.getDisplayConfig()
+
+        this.applyColorBorder(terminal, event.status, display)
+        this.applyTitleEmoji(terminal, event.status, display)
+        this.applyProgressBar(terminal, event.status, display)
+        this.applyActivityMarker(terminal, event.status, display)
+        this.applyTaskbar(event.status, display)
+
+        if (event.status === 'done') {
+            this.scheduleAutoReset(terminal)
+        }
+
+        this.audioService.speak(event.status)
+    }
+
+    // ── Display surfaces ──────────────────────────────────────────
+
+    private applyColorBorder(
+        terminal: BaseTerminalTabComponent,
+        status: ClaudeStatusName,
+        display: ClaudeStatusDisplayConfig,
+    ): void {
+        if (!display.colorBorder) {
+            if (terminal.color !== null) this.setColorWithScrollGuard(terminal, null)
+            return
+        }
+
         let newColor: string | null = null
-        switch (event.status) {
+        switch (status) {
             case 'working':
                 newColor = this.configService.getColor('working')
                 break
@@ -256,7 +328,6 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 break
             case 'done':
                 newColor = this.configService.getColor('done')
-                this.scheduleAutoReset(terminal)
                 break
             case 'error':
                 newColor = this.configService.getColor('error')
@@ -266,13 +337,141 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 break
         }
 
-        // Only update color if it actually changed — avoids triggering
-        // Angular change detection and potential scroll-to-top from xterm resize
         if (terminal.color !== newColor) {
             this.setColorWithScrollGuard(terminal, newColor)
         }
+    }
 
-        this.audioService.speak(event.status)
+    private applyTitleEmoji(
+        terminal: BaseTerminalTabComponent,
+        status: ClaudeStatusName,
+        display: ClaudeStatusDisplayConfig,
+    ): void {
+        if (!display.titleEmoji) {
+            this.restoreTitle(terminal)
+            return
+        }
+
+        const currentTitle = (terminal as any).title as string
+        if (!this.baseTitles.has(terminal)) {
+            this.baseTitles.set(terminal, this.stripEmojiPrefix(currentTitle, display))
+        }
+        const base = this.baseTitles.get(terminal) || ''
+        const emoji = display.titleEmojiMap[status] || ''
+        const next = emoji ? `${emoji} ${base}` : base
+
+        if (currentTitle !== next) {
+            try { terminal.setTitle(next) } catch { /* older Tabby may not expose setTitle */ }
+        }
+    }
+
+    private stripEmojiPrefix(title: string, display: ClaudeStatusDisplayConfig): string {
+        for (const emoji of Object.values(display.titleEmojiMap)) {
+            if (emoji && title.startsWith(`${emoji} `)) {
+                return title.slice(emoji.length + 1)
+            }
+        }
+        return title
+    }
+
+    private restoreTitle(terminal: BaseTerminalTabComponent): void {
+        const base = this.baseTitles.get(terminal)
+        if (base !== undefined) {
+            try { terminal.setTitle(base) } catch { /* noop */ }
+            this.baseTitles.delete(terminal)
+        }
+    }
+
+    private applyProgressBar(
+        terminal: BaseTerminalTabComponent,
+        status: ClaudeStatusName,
+        display: ClaudeStatusDisplayConfig,
+    ): void {
+        this.stopProgressAnimation(terminal)
+
+        if (!display.progressBar) {
+            try { terminal.setProgress(null) } catch { /* noop */ }
+            return
+        }
+
+        if (status === 'working') {
+            // Pulse an indeterminate bar: sweep 0 → 1 every ~1.5s
+            let tick = 0
+            const iv = setInterval(() => {
+                tick = (tick + 1) % 30
+                const value = tick / 30
+                try { terminal.setProgress(value) } catch { /* noop */ }
+            }, 50)
+            this.progressIntervals.set(terminal, iv)
+        } else {
+            try { terminal.setProgress(null) } catch { /* noop */ }
+        }
+    }
+
+    private stopProgressAnimation(terminal: BaseTerminalTabComponent): void {
+        const iv = this.progressIntervals.get(terminal)
+        if (iv) {
+            clearInterval(iv)
+            this.progressIntervals.delete(terminal)
+            try { terminal.setProgress(null) } catch { /* noop */ }
+        }
+    }
+
+    private applyActivityMarker(
+        terminal: BaseTerminalTabComponent,
+        status: ClaudeStatusName,
+        display: ClaudeStatusDisplayConfig,
+    ): void {
+        if (!display.activityMarker) {
+            try { terminal.clearActivity() } catch { /* noop */ }
+            return
+        }
+
+        try {
+            if (status === 'question' || status === 'error') {
+                terminal.displayActivity()
+            } else {
+                terminal.clearActivity()
+            }
+        } catch { /* older Tabby */ }
+    }
+
+    private applyTaskbar(status: ClaudeStatusName, display: ClaudeStatusDisplayConfig): void {
+        if (!display.taskbarFlash && !display.taskbarOverlay) return
+        const win = getBrowserWindow()
+        if (!win) return
+
+        // Only act when the Tabby window is not focused — otherwise flashing the
+        // currently-focused window is just noise.
+        const focused = typeof win.isFocused === 'function' ? win.isFocused() : true
+
+        if (display.taskbarFlash && !focused) {
+            try { win.flashFrame?.(status === 'question' || status === 'error') } catch { /* noop */ }
+        }
+
+        if (display.taskbarOverlay) {
+            try {
+                if (status === 'idle') {
+                    win.setOverlayIcon?.(null, '')
+                } else {
+                    const iconPath = this.getOverlayIconPath(status)
+                    if (iconPath && fs.existsSync(iconPath)) {
+                        win.setOverlayIcon?.(iconPath, status)
+                    }
+                }
+            } catch { /* noop */ }
+        }
+    }
+
+    private getOverlayIconPath(status: ClaudeStatusName): string | null {
+        try {
+            // dist/index.js lives one level up from the built overlay assets.
+            const assetsDir = path.resolve(__dirname, '..', 'assets')
+            const candidate = path.join(assetsDir, `overlay-${status}.png`)
+            return candidate
+        } catch {
+            return null
+        }
     }
 
     private setColorWithScrollGuard(terminal: BaseTerminalTabComponent, color: string | null): void {
@@ -329,8 +528,19 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
 
     private clearStatus(terminal: BaseTerminalTabComponent): void {
         this.currentStatus.set(terminal, 'idle')
+        const display = this.configService.getDisplayConfig()
+
         if (terminal.color !== null) {
             this.setColorWithScrollGuard(terminal, null)
+        }
+        this.stopProgressAnimation(terminal)
+        if (display.titleEmoji) this.restoreTitle(terminal)
+        if (display.activityMarker) {
+            try { terminal.clearActivity() } catch { /* noop */ }
+        }
+        if (display.taskbarOverlay) {
+            const win = getBrowserWindow()
+            try { win?.setOverlayIcon?.(null, '') } catch { /* noop */ }
         }
     }
 }

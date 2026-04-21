@@ -18,6 +18,12 @@ fs.cpSync(path.join(src, 'dist'), path.join(dest, 'dist'), { recursive: true })
 // Copy hook.js
 fs.copyFileSync(path.join(src, 'hook.js'), path.join(dest, 'hook.js'))
 
+// Copy assets/ (overlay icons, etc.) if it exists
+const assetsSrc = path.join(src, 'assets')
+if (fs.existsSync(assetsSrc)) {
+  fs.cpSync(assetsSrc, path.join(dest, 'assets'), { recursive: true })
+}
+
 // Synthesize a runtime package.json
 const pkg = JSON.parse(fs.readFileSync(path.join(src, 'package.json'), 'utf8'))
 const runtimePkg = {
