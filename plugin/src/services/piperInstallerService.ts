@@ -8,44 +8,65 @@ import { URL } from 'url'
 
 export interface PiperInstallPaths {
     installDir: string
+    venvDir: string
     exePath: string
     modelPath: string
     modelJsonPath: string
 }
 
 export interface InstallProgress {
-    phase: 'start' | 'download-binary' | 'extract' | 'download-model' | 'done' | 'error'
+    phase:
+        | 'start'
+        | 'detect-python'
+        | 'create-venv'
+        | 'pip-install'
+        | 'download-model'
+        | 'done'
+        | 'error'
     message: string
     bytesReceived?: number
     bytesTotal?: number
 }
 
-const RHASSPY_RELEASES_API = 'https://api.github.com/repos/rhasspy/piper/releases/latest'
-const RHASSPY_WINDOWS_ASSET = 'piper_windows_amd64.zip'
+const PIPER_PIP_PACKAGE = 'piper-tts'
 const DEFAULT_MODEL_NAME = 'en_US-lessac-medium'
-// Hugging Face hosts the voice models in a public repo maintained by rhasspy.
+// Hugging Face hosts the voice models in a public repo originally maintained
+// by rhasspy. Models are still hosted there and remain compatible with the
+// piper1-gpl successor.
 const MODEL_BASE =
     'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium'
 
 /**
- * Installs Piper TTS (https://github.com/rhasspy/piper) locally for the user.
+ * Installs Piper TTS locally for the user.
  *
- * Piper is not on winget/chocolatey/scoop, so the only reliable path is to
- * download the official release zip from GitHub and extract it. We also fetch
- * a single English voice model from Hugging Face so the backend can speak
- * immediately after install without forcing the user to hunt for a `.onnx`.
+ * Background: the original rhasspy/piper repo (which used to ship a
+ * standalone piper.exe) was archived in October 2025. The supported
+ * successor is OHF-Voice/piper1-gpl, distributed exclusively as the
+ * `piper-tts` PyPI package. The package's setuptools console_scripts entry
+ * still installs a `piper.exe` (Windows) / `piper` (POSIX) launcher in the
+ * venv's bin/Scripts dir, so the spoken-side CLI surface stays the same as
+ * the old binary.
  *
- * Install target: `%LOCALAPPDATA%\tabby-claude-status\piper\` on Windows, a
- * matching `~/.local/share/...` on *nix. Layout post-install:
- *   <installDir>/piper/piper.exe
+ * Install flow:
+ *   1. Detect a usable Python 3.9+ on PATH (`py -3`, `python`, `python3`).
+ *   2. Create a private venv at <installDir>/venv to avoid polluting the
+ *      user's global Python.
+ *   3. `pip install --upgrade piper-tts` into that venv.
+ *   4. Download a default English voice (en_US-lessac-medium .onnx + .json)
+ *      from Hugging Face so the backend has something to speak immediately.
+ *
+ * Layout post-install:
+ *   <installDir>/venv/Scripts/piper.exe   (Windows)
+ *   <installDir>/venv/bin/piper           (POSIX)
  *   <installDir>/models/en_US-lessac-medium.onnx
  *   <installDir>/models/en_US-lessac-medium.onnx.json
  */
 @Injectable({ providedIn: 'root' })
 export class PiperInstallerService {
-    readonly homepageUrl = 'https://github.com/rhasspy/piper'
-    readonly releasesUrl = 'https://github.com/rhasspy/piper/releases/latest'
+    readonly homepageUrl = 'https://github.com/OHF-Voice/piper1-gpl'
+    readonly releasesUrl = 'https://github.com/OHF-Voice/piper1-gpl/releases/latest'
     readonly voicesUrl = 'https://huggingface.co/rhasspy/piper-voices'
+    readonly pythonDownloadUrl = 'https://www.python.org/downloads/'
 
     getInstallPaths(): PiperInstallPaths {
         const root =
@@ -57,11 +78,15 @@ export class PiperInstallerService {
                   )
                 : path.join(os.homedir(), '.local', 'share', 'tabby-claude-status', 'piper')
 
-        const exeName = process.platform === 'win32' ? 'piper.exe' : 'piper'
+        const venvDir = path.join(root, 'venv')
+        const exePath =
+            process.platform === 'win32'
+                ? path.join(venvDir, 'Scripts', 'piper.exe')
+                : path.join(venvDir, 'bin', 'piper')
         return {
             installDir: root,
-            // The zip extracts as `piper/piper.exe` under whatever dir we give it.
-            exePath: path.join(root, 'piper', exeName),
+            venvDir,
+            exePath,
             modelPath: path.join(root, 'models', `${DEFAULT_MODEL_NAME}.onnx`),
             modelJsonPath: path.join(root, 'models', `${DEFAULT_MODEL_NAME}.onnx.json`),
         }
@@ -78,8 +103,8 @@ export class PiperInstallerService {
 
     /**
      * Detect any CLI package manager that we could theoretically shell out to.
-     * Piper itself isn't available in any of these, but we still surface the
-     * detection so a future manifest can take advantage of it.
+     * Surface them informationally even though piper-tts itself only comes
+     * via pip — it lets the UI hint that other tools exist.
      */
     async detectInstallers(): Promise<string[]> {
         const detected: string[] = []
@@ -100,39 +125,96 @@ export class PiperInstallerService {
         })
     }
 
+    /**
+     * Find a Python interpreter ≥3.9 we can use to bootstrap the venv.
+     * Tries the Windows `py -3` launcher first (handles multiple installs
+     * cleanly), then `python`, then `python3`.
+     */
+    async detectPython(): Promise<{ exe: string; args: string[]; version: string } | null> {
+        const candidates: { exe: string; args: string[] }[] =
+            process.platform === 'win32'
+                ? [
+                      { exe: 'py', args: ['-3'] },
+                      { exe: 'python', args: [] },
+                      { exe: 'python3', args: [] },
+                  ]
+                : [
+                      { exe: 'python3', args: [] },
+                      { exe: 'python', args: [] },
+                  ]
+
+        for (const c of candidates) {
+            try {
+                const out = await this.runCapture(c.exe, [...c.args, '--version'])
+                const m = out.match(/Python\s+(\d+)\.(\d+)\.(\d+)/i)
+                if (!m) continue
+                const major = Number(m[1])
+                const minor = Number(m[2])
+                if (major < 3 || (major === 3 && minor < 9)) continue
+                return { exe: c.exe, args: c.args, version: `${major}.${minor}.${m[3]}` }
+            } catch {
+                /* try next candidate */
+            }
+        }
+        return null
+    }
+
     async install(onProgress: (p: InstallProgress) => void): Promise<PiperInstallPaths> {
         const paths = this.getInstallPaths()
         onProgress({ phase: 'start', message: `Installing to ${paths.installDir}` })
 
+        // 1. Find Python.
+        onProgress({ phase: 'detect-python', message: 'Looking for Python 3.9+ on PATH…' })
+        const python = await this.detectPython()
+        if (!python) {
+            throw new Error(
+                `Python 3.9 or later is required to install Piper TTS, but none was found on PATH.\n\n` +
+                    `Piper switched from a standalone C++ binary to the piper-tts Python package after the original repo was archived.\n\n` +
+                    `Install Python from ${this.pythonDownloadUrl} (or the Microsoft Store), then click Install again.`,
+            )
+        }
+        onProgress({
+            phase: 'detect-python',
+            message: `Found Python ${python.version} (${python.exe}).`,
+        })
+
         await fs.promises.mkdir(paths.installDir, { recursive: true })
         await fs.promises.mkdir(path.dirname(paths.modelPath), { recursive: true })
 
-        // 1. Resolve the latest Piper release zip URL.
-        onProgress({ phase: 'download-binary', message: 'Looking up latest Piper release…' })
-        const zipUrl = await this.resolveLatestBinaryUrl()
-        const zipPath = path.join(paths.installDir, RHASSPY_WINDOWS_ASSET)
+        // 2. Create venv. `python -m venv` is idempotent — re-running is fine,
+        //    it just refreshes pyvenv.cfg.
+        onProgress({ phase: 'create-venv', message: 'Creating Python virtual environment…' })
+        await this.runStream(
+            python.exe,
+            [...python.args, '-m', 'venv', paths.venvDir],
+            'venv',
+        )
 
-        onProgress({ phase: 'download-binary', message: `Downloading ${RHASSPY_WINDOWS_ASSET}…` })
-        await this.downloadFile(zipUrl, zipPath, (bytesReceived, bytesTotal) => {
-            onProgress({
-                phase: 'download-binary',
-                message: `Downloading Piper binary (${fmtBytes(bytesReceived)} / ${fmtBytes(bytesTotal)})`,
-                bytesReceived,
-                bytesTotal,
-            })
+        // 3. Pip-install (or upgrade) piper-tts into the venv. Using the venv's
+        //    own python ensures we never touch the system site-packages.
+        const venvPython =
+            process.platform === 'win32'
+                ? path.join(paths.venvDir, 'Scripts', 'python.exe')
+                : path.join(paths.venvDir, 'bin', 'python')
+
+        onProgress({ phase: 'pip-install', message: 'Upgrading pip in venv…' })
+        await this.runStream(
+            venvPython,
+            ['-m', 'pip', 'install', '--upgrade', '--quiet', 'pip'],
+            'pip-upgrade',
+        )
+
+        onProgress({
+            phase: 'pip-install',
+            message: `Installing latest ${PIPER_PIP_PACKAGE} (and its onnxruntime dependency)…`,
         })
+        await this.runStream(
+            venvPython,
+            ['-m', 'pip', 'install', '--upgrade', PIPER_PIP_PACKAGE],
+            'pip-install',
+        )
 
-        // 2. Extract the archive. On Windows we use PowerShell's Expand-Archive
-        //    which is built-in; on other platforms we'd need to extend this.
-        onProgress({ phase: 'extract', message: 'Extracting archive…' })
-        await this.extractZip(zipPath, paths.installDir)
-        try {
-            await fs.promises.unlink(zipPath)
-        } catch {
-            /* keep the zip around if the OS won't delete it; not fatal */
-        }
-
-        // 3. Download the default voice model + its json sidecar.
+        // 4. Download the default voice model + its json sidecar.
         onProgress({
             phase: 'download-model',
             message: `Downloading voice model ${DEFAULT_MODEL_NAME}.onnx…`,
@@ -155,10 +237,12 @@ export class PiperInstallerService {
             () => {},
         )
 
-        // 4. Sanity check.
+        // 5. Sanity check.
         if (!this.isInstalled()) {
             throw new Error(
-                `Install ran but expected files are missing:\n  ${paths.exePath}\n  ${paths.modelPath}`,
+                `Install ran but expected files are missing:\n  ${paths.exePath}\n  ${paths.modelPath}\n\n` +
+                    `If the venv didn't get a piper.exe entrypoint, the pip install probably failed silently — try running it manually:\n` +
+                    `  "${venvPython}" -m pip install --upgrade ${PIPER_PIP_PACKAGE}`,
             )
         }
 
@@ -166,33 +250,47 @@ export class PiperInstallerService {
         return paths
     }
 
-    private async resolveLatestBinaryUrl(): Promise<string> {
-        const release = await this.fetchJson(RHASSPY_RELEASES_API)
-        const asset = (release?.assets as Array<{ name: string; browser_download_url: string }> | undefined)?.find(
-            a => a.name === RHASSPY_WINDOWS_ASSET,
-        )
-        if (!asset) {
-            throw new Error(
-                `Latest Piper release has no ${RHASSPY_WINDOWS_ASSET} asset — GitHub release layout may have changed.`,
-            )
-        }
-        return asset.browser_download_url
+    /**
+     * Run a child process and capture its full stdout (used for short-lived
+     * commands like `python --version`). Rejects with stderr when the
+     * process exits non-zero.
+     */
+    private runCapture(exe: string, args: string[]): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const proc = spawn(exe, args, { windowsHide: true })
+            let stdout = ''
+            let stderr = ''
+            proc.stdout.on('data', d => { stdout += d.toString() })
+            proc.stderr.on('data', d => { stderr += d.toString() })
+            proc.on('error', reject)
+            proc.on('close', code => {
+                if (code === 0) resolve(stdout + stderr) // some versions of python print to stderr
+                else reject(new Error(`${exe} ${args.join(' ')} exited ${code}: ${stderr.trim()}`))
+            })
+        })
     }
 
-    private fetchJson(url: string): Promise<any> {
+    /**
+     * Run a child process whose stderr/stdout we want to surface in errors
+     * but don't need to stream live. `phase` is included in the error
+     * message so the user can tell which step failed.
+     */
+    private runStream(exe: string, args: string[], phase: string): Promise<void> {
         return new Promise((resolve, reject) => {
-            this.httpGet(url, res => {
-                const chunks: Buffer[] = []
-                res.on('data', c => chunks.push(Buffer.from(c)))
-                res.on('end', () => {
-                    try {
-                        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
-                    } catch (e) {
-                        reject(e)
-                    }
-                })
-                res.on('error', reject)
-            }).catch(reject)
+            const proc = spawn(exe, args, { windowsHide: true })
+            let stderr = ''
+            let stdout = ''
+            proc.stdout.on('data', d => { stdout += d.toString() })
+            proc.stderr.on('data', d => { stderr += d.toString() })
+            proc.on('error', reject)
+            proc.on('close', code => {
+                if (code === 0) {
+                    resolve()
+                } else {
+                    const detail = (stderr.trim() || stdout.trim() || '(no output)').slice(-2000)
+                    reject(new Error(`${phase} failed (exit ${code}): ${detail}`))
+                }
+            })
         })
     }
 
@@ -219,8 +317,8 @@ export class PiperInstallerService {
     }
 
     /**
-     * GET with automatic redirect following — GitHub and Hugging Face both
-     * respond with 302 to CDN URLs for binary assets.
+     * GET with automatic redirect following — Hugging Face responds with 302
+     * to CDN URLs for binary assets.
      */
     private httpGet(
         url: string,
@@ -239,10 +337,7 @@ export class PiperInstallerService {
                     path: parsed.pathname + parsed.search,
                     headers: {
                         'User-Agent': 'tabby-claude-status-plugin',
-                        Accept:
-                            parsed.pathname.endsWith('.json') || parsed.hostname.includes('api.github.com')
-                                ? 'application/json'
-                                : '*/*',
+                        Accept: '*/*',
                     },
                 },
                 res => {
@@ -261,49 +356,6 @@ export class PiperInstallerService {
                 },
             )
             req.on('error', reject)
-        })
-    }
-
-    private extractZip(zipPath: string, destDir: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            if (process.platform === 'win32') {
-                // PowerShell Expand-Archive is built into Windows 10+.
-                const proc = spawn(
-                    'powershell.exe',
-                    [
-                        '-NoProfile',
-                        '-ExecutionPolicy',
-                        'Bypass',
-                        '-Command',
-                        `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${destDir.replace(
-                            /'/g,
-                            "''",
-                        )}' -Force`,
-                    ],
-                    { windowsHide: true },
-                )
-                let stderr = ''
-                proc.stderr.on('data', d => {
-                    stderr += d.toString()
-                })
-                proc.on('error', reject)
-                proc.on('close', code => {
-                    if (code === 0) resolve()
-                    else reject(new Error(`Expand-Archive exited ${code}: ${stderr}`))
-                })
-            } else {
-                // Mac/Linux fallback — `unzip` is near-universal.
-                const proc = spawn('unzip', ['-o', zipPath, '-d', destDir], { stdio: 'pipe' })
-                let stderr = ''
-                proc.stderr.on('data', d => {
-                    stderr += d.toString()
-                })
-                proc.on('error', reject)
-                proc.on('close', code => {
-                    if (code === 0) resolve()
-                    else reject(new Error(`unzip exited ${code}: ${stderr}`))
-                })
-            }
         })
     }
 }

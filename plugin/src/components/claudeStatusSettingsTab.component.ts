@@ -79,6 +79,93 @@ interface BackendOption {
             color: var(--bs-success, #28a745);
             opacity: 1;
         }
+
+        /* Toggle + label rows: vertically centred, label click toggles. */
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .toggle-row .toggle-label {
+            cursor: pointer;
+            user-select: none;
+            margin: 0;
+        }
+        .toggle-row.indented {
+            margin-left: 1.5rem;
+        }
+
+        /* Theme-agnostic status alerts. Semi-transparent backgrounds work
+           on both Tabby's dark chrome and the light-themed settings page;
+           Bootstrap's default alert-* classes inherit dark CSS variables
+           even on light surfaces, which made green text on a near-black
+           bg unreadable in light mode. */
+        .claude-alert {
+            border-radius: 0.375rem;
+            padding: 0.5rem 0.875rem;
+            border: 1px solid transparent;
+            color: var(--bs-body-color, inherit);
+        }
+        .claude-alert-success {
+            background-color: rgba(25, 135, 84, 0.15);
+            border-color: rgba(25, 135, 84, 0.45);
+        }
+        .claude-alert-warning {
+            background-color: rgba(255, 193, 7, 0.15);
+            border-color: rgba(255, 193, 7, 0.5);
+        }
+        .claude-alert-danger {
+            background-color: rgba(220, 53, 69, 0.15);
+            border-color: rgba(220, 53, 69, 0.5);
+        }
+        .claude-alert-info {
+            background-color: rgba(13, 110, 253, 0.15);
+            border-color: rgba(13, 110, 253, 0.45);
+        }
+
+        /* Tabs nav across the top of the settings panel. */
+        .settings-tabs {
+            border-bottom: 1px solid var(--bs-border-color, rgba(128, 128, 128, 0.25));
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.25rem;
+            margin-bottom: 1rem;
+            padding: 0;
+            list-style: none;
+        }
+        .settings-tabs .nav-link {
+            cursor: pointer;
+            padding: 0.5rem 0.875rem;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-top-left-radius: 0.375rem;
+            border-top-right-radius: 0.375rem;
+            color: var(--bs-secondary-color, #888);
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            margin-bottom: -1px;
+        }
+        .settings-tabs .nav-link:hover {
+            color: var(--bs-body-color, inherit);
+            background-color: rgba(128, 128, 128, 0.08);
+        }
+        .settings-tabs .nav-link.active {
+            color: var(--bs-body-color, inherit);
+            background-color: var(--bs-body-bg, transparent);
+            border-color: var(--bs-border-color, rgba(128, 128, 128, 0.25));
+            border-bottom-color: var(--bs-body-bg, transparent);
+        }
+        .settings-tabs .tab-badge {
+            background: rgba(128, 128, 128, 0.2);
+            color: inherit;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            padding: 0 0.45rem;
+            line-height: 1.4;
+        }
     `],
     template: `
         <div class="container-fluid">
@@ -95,133 +182,191 @@ interface BackendOption {
                 </a>
             </div>
 
-            <!-- Enable plugin -->
-            <div class="form-group mb-3">
-                <toggle
-                    [(ngModel)]="config.store.claudeStatus.enabled"
-                    (ngModelChange)="save()"
-                ></toggle>
-                <label class="ms-2">Enable plugin</label>
-            </div>
+            <!-- Tab navigation -->
+            <ul class="settings-tabs">
+                <li *ngFor="let t of tabs">
+                    <a class="nav-link"
+                       [class.active]="activeTab === t.id"
+                       (click)="activeTab = t.id">
+                        <i class="fas {{t.icon}}"></i>
+                        <span>{{t.label}}</span>
+                    </a>
+                </li>
+            </ul>
 
-            <hr />
+            <!-- ============== GENERAL TAB ============== -->
+            <div *ngIf="activeTab === 'general'">
 
-            <!-- Tab Colors -->
-            <h5>Tab Colors</h5>
-            <div class="row mb-3">
-                <div class="col-3" *ngFor="let status of colorStatuses">
-                    <label class="form-label text-capitalize">{{status}}</label>
+                <!-- Enable plugin -->
+                <div class="toggle-row">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.enabled"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus, 'enabled')">
+                        Enable plugin
+                    </label>
+                </div>
+
+                <hr />
+
+                <!-- Display surfaces -->
+                <h5>Display surfaces</h5>
+                <p class="text-muted small">
+                    Each surface updates independently when Claude status changes.
+                    Leave off the ones you don't want.
+                </p>
+
+                <div class="toggle-row">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.display.colorBorder"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus.display, 'colorBorder')">
+                        Tab bottom border colour
+                    </label>
+                </div>
+
+                <!-- Tab Colors palette is only meaningful when colorBorder is on,
+                     so co-locate it under the toggle that consumes it. -->
+                <div *ngIf="config.store.claudeStatus.display.colorBorder"
+                     class="row mb-3 ms-4" style="max-width: 640px">
+                    <div class="col-3" *ngFor="let status of colorStatuses">
+                        <label class="form-label text-capitalize small mb-1">{{status}}</label>
+                        <input
+                            type="color"
+                            class="form-control form-control-color"
+                            [ngModel]="getColor(status)"
+                            (ngModelChange)="setColor(status, $event)"
+                        />
+                    </div>
+                    <div class="col-12 mt-1">
+                        <div class="toggle-row">
+                            <toggle
+                                [(ngModel)]="config.store.claudeStatus.clearOnFocus"
+                                (ngModelChange)="save()"
+                            ></toggle>
+                            <label class="toggle-label"
+                                   (click)="toggleField(config.store.claudeStatus, 'clearOnFocus')">
+                                Clear tab color when tab is focused
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="toggle-row">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.display.titleEmoji"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus.display, 'titleEmoji')">
+                        Tab title emoji prefix
+                    </label>
+                </div>
+
+                <div *ngIf="config.store.claudeStatus.display.titleEmoji"
+                     class="row mb-2 ms-4" style="max-width: 560px">
+                    <div class="col-4 mb-1" *ngFor="let status of emojiStatuses">
+                        <label class="form-label text-capitalize small mb-1">{{status}}</label>
+                        <input
+                            type="text"
+                            class="form-control form-control-sm"
+                            [ngModel]="getEmoji(status)"
+                            (ngModelChange)="setEmoji(status, $event)"
+                            maxlength="4"
+                        />
+                    </div>
+                </div>
+
+                <div class="toggle-row">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.display.progressBar"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus.display, 'progressBar')">
+                        Indeterminate progress bar while <em>working</em>
+                    </label>
+                </div>
+
+                <div class="toggle-row">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.display.activityMarker"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus.display, 'activityMarker')">
+                        Activity marker dot on <em>question</em> / <em>error</em>
+                    </label>
+                </div>
+
+                <div class="toggle-row">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.display.taskbarFlash"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus.display, 'taskbarFlash')">
+                        Flash taskbar when Tabby is unfocused
+                    </label>
+                </div>
+
+                <div class="toggle-row">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.display.taskbarOverlay"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus.display, 'taskbarOverlay')">
+                        Taskbar icon overlay per status
+                    </label>
+                </div>
+
+                <hr />
+
+                <div class="form-group mb-3">
+                    <label class="form-label">Auto-reset "done" after (ms, 0 = disabled)</label>
                     <input
-                        type="color"
-                        class="form-control form-control-color"
-                        [ngModel]="getColor(status)"
-                        (ngModelChange)="setColor(status, $event)"
+                        type="number"
+                        class="form-control"
+                        style="max-width: 200px"
+                        [(ngModel)]="config.store.claudeStatus.doneAutoResetMs"
+                        (ngModelChange)="save()"
+                        min="0"
+                        step="1000"
                     />
+                </div>
+
+                <div class="toggle-row">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.debugMode"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus, 'debugMode')">
+                        Debug mode (logs to DevTools console)
+                    </label>
                 </div>
             </div>
 
-            <div class="form-group mb-3">
-                <toggle
-                    [(ngModel)]="config.store.claudeStatus.clearOnFocus"
-                    (ngModelChange)="save()"
-                ></toggle>
-                <label class="ms-2">Clear tab color when tab is focused</label>
-            </div>
-
-            <div class="form-group mb-3">
-                <label class="form-label">Auto-reset "done" after (ms, 0 = disabled)</label>
-                <input
-                    type="number"
-                    class="form-control"
-                    style="max-width: 200px"
-                    [(ngModel)]="config.store.claudeStatus.doneAutoResetMs"
-                    (ngModelChange)="save()"
-                    min="0"
-                    step="1000"
-                />
-            </div>
-
-            <hr />
-
-            <!-- Display surfaces -->
-            <h5>Display surfaces</h5>
-            <p class="text-muted small">
-                Each surface updates independently when Claude status changes.
-                Leave off the ones you don't want.
-            </p>
-
-            <div class="form-group mb-2">
-                <toggle
-                    [(ngModel)]="config.store.claudeStatus.display.colorBorder"
-                    (ngModelChange)="save()"
-                ></toggle>
-                <label class="ms-2">Tab bottom border colour</label>
-            </div>
-
-            <div class="form-group mb-2">
-                <toggle
-                    [(ngModel)]="config.store.claudeStatus.display.titleEmoji"
-                    (ngModelChange)="save()"
-                ></toggle>
-                <label class="ms-2">Tab title emoji prefix</label>
-            </div>
-
-            <div *ngIf="config.store.claudeStatus.display.titleEmoji" class="row mb-2 ms-3" style="max-width: 560px">
-                <div class="col-4 mb-1" *ngFor="let status of emojiStatuses">
-                    <label class="form-label text-capitalize small mb-1">{{status}}</label>
-                    <input
-                        type="text"
-                        class="form-control form-control-sm"
-                        [ngModel]="getEmoji(status)"
-                        (ngModelChange)="setEmoji(status, $event)"
-                        maxlength="4"
-                    />
-                </div>
-            </div>
-
-            <div class="form-group mb-2">
-                <toggle
-                    [(ngModel)]="config.store.claudeStatus.display.progressBar"
-                    (ngModelChange)="save()"
-                ></toggle>
-                <label class="ms-2">Indeterminate progress bar while <em>working</em></label>
-            </div>
-
-            <div class="form-group mb-2">
-                <toggle
-                    [(ngModel)]="config.store.claudeStatus.display.activityMarker"
-                    (ngModelChange)="save()"
-                ></toggle>
-                <label class="ms-2">Activity marker dot on <em>question</em> / <em>error</em></label>
-            </div>
-
-            <div class="form-group mb-2">
-                <toggle
-                    [(ngModel)]="config.store.claudeStatus.display.taskbarFlash"
-                    (ngModelChange)="save()"
-                ></toggle>
-                <label class="ms-2">Flash taskbar when Tabby is unfocused</label>
-            </div>
-
-            <div class="form-group mb-3">
-                <toggle
-                    [(ngModel)]="config.store.claudeStatus.display.taskbarOverlay"
-                    (ngModelChange)="save()"
-                ></toggle>
-                <label class="ms-2">Taskbar icon overlay per status</label>
-            </div>
-
-            <hr />
+            <!-- ============== AUDIO / TTS TAB ============== -->
+            <div *ngIf="activeTab === 'audio'">
 
             <!-- Audio / TTS -->
             <h5>Audio / TTS</h5>
 
-            <div class="form-group mb-3">
+            <div class="toggle-row">
                 <toggle
                     [(ngModel)]="config.store.claudeStatus.audio.enabled"
                     (ngModelChange)="save()"
                 ></toggle>
-                <label class="ms-2">Enable audio notifications</label>
+                <label class="toggle-label"
+                       (click)="toggleField(config.store.claudeStatus.audio, 'enabled')">
+                    Enable audio notifications
+                </label>
             </div>
 
             <div *ngIf="config.store.claudeStatus.audio.enabled">
@@ -246,18 +391,48 @@ interface BackendOption {
 
                 <div class="form-group mb-3">
                     <label class="form-label">Voice</label>
+                    <div *ngIf="currentVoices.length > 1"
+                         class="d-flex gap-2 mb-2 flex-wrap"
+                         style="max-width: 700px">
+                        <select class="form-control form-control-sm"
+                                style="max-width: 240px"
+                                [(ngModel)]="voiceLanguageFilter">
+                            <option value="">All languages ({{currentVoices.length}})</option>
+                            <option *ngFor="let lang of voiceLanguageOptions" [value]="lang.code">
+                                {{lang.name}} ({{lang.count}})
+                            </option>
+                        </select>
+                        <input type="text"
+                               class="form-control form-control-sm"
+                               style="flex: 1; min-width: 180px"
+                               placeholder="Filter by name…"
+                               [(ngModel)]="voiceTextFilter" />
+                        <button *ngIf="voiceLanguageFilter || voiceTextFilter"
+                                class="btn btn-sm btn-outline-secondary"
+                                type="button"
+                                title="Clear filters"
+                                (click)="clearVoiceFilters()">
+                            ✕
+                        </button>
+                    </div>
                     <select
                         class="form-control"
-                        style="max-width: 500px"
+                        style="max-width: 700px"
                         [ngModel]="getSelectedVoiceId()"
                         (ngModelChange)="onVoiceChange($event)"
                     >
                         <option value="">(default for this backend)</option>
-                        <option *ngFor="let v of currentVoices" [value]="v.id">{{v.label}}</option>
+                        <optgroup *ngFor="let g of filteredAndGroupedVoices" [label]="g.groupLabel">
+                            <option *ngFor="let v of g.voices" [value]="v.id">{{v.label}}</option>
+                        </optgroup>
                     </select>
                     <div *ngIf="voicesLoading" class="form-text text-muted">Loading voices…</div>
                     <div *ngIf="!voicesLoading && currentVoices.length === 0" class="form-text text-warning">
                         No voices available for this backend. Check availability indicator above.
+                    </div>
+                    <div *ngIf="!voicesLoading && currentVoices.length > 0 && filteredVoiceCount === 0"
+                         class="form-text text-warning">
+                        No voices match the current filter.
                     </div>
                 </div>
 
@@ -273,20 +448,23 @@ interface BackendOption {
                         </a>
                     </div>
 
-                    <div *ngIf="piperInstalled" class="alert alert-success py-2 mb-2">
-                        Piper is installed. Click "Reinstall" to re-download.
+                    <div *ngIf="piperInstalled" class="claude-alert claude-alert-success mb-2">
+                        Piper is installed. Click "Reinstall" to re-download the latest <code>piper-tts</code> from PyPI.
                     </div>
-                    <div *ngIf="!piperInstalled && !piperInstalling" class="alert alert-warning py-2 mb-2">
-                        Piper isn't installed yet. Click the button below to download
-                        it and the default en_US-lessac-medium voice (~25 MB total).
-                        Not available via winget / scoop / choco, so we fetch it
-                        directly from the
-                        <a href="#" (click)="openUrl(piperInstaller.releasesUrl, $event)">official GitHub release</a>.
+                    <div *ngIf="!piperInstalled && !piperInstalling" class="claude-alert claude-alert-warning mb-2">
+                        Piper isn't installed yet. The original C++ binary repo was archived in 2025;
+                        the supported successor is
+                        <a href="#" (click)="openUrl(piperInstaller.homepageUrl, $event)">OHF-Voice/piper1-gpl</a>,
+                        distributed as the
+                        <code>piper-tts</code> PyPI package. We'll create a private Python venv
+                        under <code>%LOCALAPPDATA%\\tabby-claude-status\\piper</code>, pip-install the latest
+                        version into it, and download the default <code>en_US-lessac-medium</code> voice
+                        (~25 MB total). Requires Python 3.9+ on PATH.
                     </div>
-                    <div *ngIf="piperInstalling" class="alert alert-info py-2 mb-2">
+                    <div *ngIf="piperInstalling" class="claude-alert claude-alert-info mb-2">
                         {{piperInstallStatus || 'Installing…'}}
                     </div>
-                    <div *ngIf="piperInstallError" class="alert alert-danger py-2 mb-2">
+                    <div *ngIf="piperInstallError" class="claude-alert claude-alert-danger mb-2">
                         Install failed: {{piperInstallError}}
                     </div>
 
@@ -339,32 +517,45 @@ interface BackendOption {
                     </div>
                 </div>
 
-                <div class="form-group mb-3">
+                <div class="toggle-row">
                     <toggle
                         [(ngModel)]="config.store.claudeStatus.audio.systemBeep"
                         (ngModelChange)="save()"
                     ></toggle>
-                    <label class="ms-2">Play system beep alongside TTS</label>
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus.audio, 'systemBeep')">
+                        Play system beep alongside TTS
+                    </label>
                 </div>
 
                 <div class="form-group mb-3">
-                    <toggle
-                        [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomRecording"
-                        (ngModelChange)="save()"
-                    ></toggle>
-                    <label class="ms-2">Mute while Zoom is recording</label>
-                    <div class="form-text">
+                    <div class="toggle-row mb-1">
+                        <toggle
+                            [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomRecording"
+                            (ngModelChange)="save()"
+                        ></toggle>
+                        <label class="toggle-label"
+                               (click)="toggleField(config.store.claudeStatus.audio, 'muteDuringZoomRecording')">
+                            Mute while Zoom is recording
+                        </label>
+                    </div>
+                    <div class="form-text ms-4">
                         Detected via recent writes in the Zoom recording folder.
                     </div>
                 </div>
 
                 <div class="form-group mb-3">
-                    <toggle
-                        [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomMeeting"
-                        (ngModelChange)="save()"
-                    ></toggle>
-                    <label class="ms-2">Mute while in any Zoom meeting</label>
-                    <div class="form-text">
+                    <div class="toggle-row mb-1">
+                        <toggle
+                            [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomMeeting"
+                            (ngModelChange)="save()"
+                        ></toggle>
+                        <label class="toggle-label"
+                               (click)="toggleField(config.store.claudeStatus.audio, 'muteDuringZoomMeeting')">
+                            Mute while in any Zoom meeting
+                        </label>
+                    </div>
+                    <div class="form-text ms-4">
                         Detected via active UDP media sockets owned by Zoom.exe.
                     </div>
                 </div>
@@ -389,8 +580,10 @@ interface BackendOption {
                     </div>
                 </div>
             </div>
+            </div><!-- /audio tab -->
 
-            <hr />
+            <!-- ============== SESSIONS TAB ============== -->
+            <div *ngIf="activeTab === 'sessions'">
 
             <!-- Session restore -->
             <h5>Session restore</h5>
@@ -400,21 +593,25 @@ interface BackendOption {
                 to disk until this is enabled.
             </p>
 
-            <div class="form-group mb-2">
+            <div class="toggle-row">
                 <toggle
                     [(ngModel)]="config.store.claudeStatus.sessionRestore.enabled"
                     (ngModelChange)="save()"
                 ></toggle>
-                <label class="ms-2">Enable session tracking</label>
+                <label class="toggle-label"
+                       (click)="toggleField(config.store.claudeStatus.sessionRestore, 'enabled')">
+                    Enable session tracking
+                </label>
             </div>
 
             <div *ngIf="config.store.claudeStatus.sessionRestore.enabled">
-                <div class="form-group mb-2 ms-3">
+                <div class="toggle-row indented">
                     <toggle
                         [(ngModel)]="config.store.claudeStatus.sessionRestore.autoResumeOnLaunch"
                         (ngModelChange)="save()"
                     ></toggle>
-                    <label class="ms-2">
+                    <label class="toggle-label"
+                           (click)="toggleField(config.store.claudeStatus.sessionRestore, 'autoResumeOnLaunch')">
                         Auto-resume open sessions on Tabby launch
                     </label>
                 </div>
@@ -648,11 +845,24 @@ interface BackendOption {
                     </div>
                 </div>
             </div>
+            </div><!-- /sessions tab -->
 
-            <hr />
+            <!-- ============== HOOKS TAB ============== -->
+            <div *ngIf="activeTab === 'hooks'">
 
             <!-- Hook Setup -->
-            <h5>Claude Code Hook Setup</h5>
+            <div class="d-flex align-items-center gap-2 mb-1">
+                <h5 class="mb-0">Claude Code Hook Setup</h5>
+                <button class="btn btn-sm btn-link p-0 text-decoration-none"
+                        type="button"
+                        title="What do these hooks do?"
+                        (click)="hooksHelpOpen = !hooksHelpOpen">
+                    <i class="fas"
+                       [class.fa-question-circle]="!hooksHelpOpen"
+                       [class.fa-times-circle]="hooksHelpOpen"></i>
+                    <span class="ms-1 small">{{hooksHelpOpen ? 'Hide' : 'What are these?'}}</span>
+                </button>
+            </div>
             <p class="text-muted small">
                 Claude Code sends status events to this plugin via hooks. We check
                 <code>~/.claude/settings.json</code> in Windows and in every detected WSL
@@ -662,6 +872,58 @@ interface BackendOption {
                 so you don't have to install Node inside the distro.
             </p>
 
+            <div *ngIf="hooksHelpOpen" class="card mb-3" style="max-width: 900px">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-baseline mb-2">
+                        <h6 class="mb-0">Hook events used by this plugin</h6>
+                        <span class="small text-muted">{{hookEventDescriptions.length}} events</span>
+                    </div>
+                    <p class="small text-muted mb-2">
+                        Each event triggers a small <code>hook.js</code> launcher that writes a
+                        JSON payload to a temp file the plugin watches. The launcher is the
+                        same in every location — only the <code>node</code> path differs
+                        (Windows <code>node.exe</code> vs WSL <code>/mnt/c/…/node.exe</code>).
+                    </p>
+                    <table class="table table-sm mb-2">
+                        <thead>
+                            <tr>
+                                <th style="width: 26px"></th>
+                                <th style="width: 170px">Event</th>
+                                <th>What this plugin does with it</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr *ngFor="let h of hookEventDescriptions">
+                                <td class="text-center">
+                                    <i *ngIf="isHookEventConfigured(h.event)"
+                                       class="fas fa-check-circle text-success"
+                                       title="Wired up in at least one settings.json"></i>
+                                    <i *ngIf="!isHookEventConfigured(h.event)"
+                                       class="far fa-circle text-muted"
+                                       title="Not configured in any settings.json"></i>
+                                </td>
+                                <td><code class="small">{{h.event}}</code></td>
+                                <td class="small">
+                                    <span class="badge text-bg-secondary me-1"
+                                          [style.background-color]="h.statusColor + ' !important'"
+                                          *ngIf="h.statusLabel">
+                                        → {{h.statusLabel}}
+                                    </span>
+                                    {{h.purpose}}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="small text-muted">
+                        Reference:
+                        <a href="#"
+                           (click)="openUrl('https://docs.claude.com/en/docs/claude-code/hooks', $event)">
+                            Claude Code hook events docs
+                        </a>
+                    </div>
+                </div>
+            </div>
+
             <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
                 <div class="btn-group" (click)="$event.stopPropagation()">
                     <button class="btn btn-primary"
@@ -669,8 +931,9 @@ interface BackendOption {
                             (click)="setupHooks({ target: 'windows' })">
                         Setup Claude Hooks (Windows)
                     </button>
-                    <button class="btn btn-primary dropdown-toggle dropdown-toggle-split"
+                    <button class="btn btn-primary"
                             type="button"
+                            style="padding-left: 0.6rem; padding-right: 0.6rem;"
                             [disabled]="setupRunning"
                             (click)="setupDropdownOpen = !setupDropdownOpen">
                         <span class="caret">▾</span>
@@ -753,7 +1016,10 @@ interface BackendOption {
                 </tbody>
             </table>
 
-            <hr />
+            </div><!-- /hooks tab -->
+
+            <!-- ============== DIAGNOSTICS TAB ============== -->
+            <div *ngIf="activeTab === 'diagnostics'">
 
             <!-- Diagnostics -->
             <h5>Diagnostics</h5>
@@ -800,23 +1066,13 @@ interface BackendOption {
                 </tbody>
             </table>
 
-            <div *ngIf="!nodeInfo.path" class="alert alert-warning mt-2" style="max-width: 600px">
+            <div *ngIf="!nodeInfo.path" class="claude-alert claude-alert-warning mt-2" style="max-width: 600px">
                 <strong>Node.js not detected on Tabby's PATH.</strong>
                 If you use nvm or fnm, Tabby launched from a desktop shortcut may not
                 inherit your shell's PATH. Hooks will still work because Claude Code
                 provides its own Node.js runtime.
             </div>
-
-            <hr />
-
-            <!-- Debug -->
-            <div class="form-group mb-3">
-                <toggle
-                    [(ngModel)]="config.store.claudeStatus.debugMode"
-                    (ngModelChange)="save()"
-                ></toggle>
-                <label class="ms-2">Debug mode (logs to DevTools console)</label>
-            </div>
+            </div><!-- /diagnostics tab -->
         </div>
     `,
 })
@@ -829,6 +1085,15 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
 
     backends: BackendOption[] = []
     voicesLoading = false
+    voiceLanguageFilter = 'en'
+    voiceTextFilter = ''
+    filteredVoiceCount = 0
+    private languageDisplayNames: Intl.DisplayNames | null = (() => {
+        try { return new Intl.DisplayNames(['en'], { type: 'language' }) } catch { return null }
+    })()
+    private regionDisplayNames: Intl.DisplayNames | null = (() => {
+        try { return new Intl.DisplayNames(['en'], { type: 'region' }) } catch { return null }
+    })()
     pluginVersion = PLUGIN_PACKAGE.version
     pluginHomepage = PLUGIN_PACKAGE.homepage || ''
     pluginRepoLabel = (() => {
@@ -861,6 +1126,80 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     copiedKey = ''
     setupDropdownOpen = false
     setupRunning = false
+    hooksHelpOpen = false
+    activeTab: 'general' | 'audio' | 'sessions' | 'hooks' | 'diagnostics' = 'general'
+    readonly tabs: ReadonlyArray<{
+        id: 'general' | 'audio' | 'sessions' | 'hooks' | 'diagnostics'
+        label: string
+        icon: string
+    }> = [
+        { id: 'general', label: 'General', icon: 'fa-sliders-h' },
+        { id: 'audio', label: 'Audio / TTS', icon: 'fa-volume-up' },
+        { id: 'sessions', label: 'Sessions', icon: 'fa-history' },
+        { id: 'hooks', label: 'Hooks', icon: 'fa-link' },
+        { id: 'diagnostics', label: 'Diagnostics', icon: 'fa-stethoscope' },
+    ]
+    readonly hookEventDescriptions: ReadonlyArray<{
+        event: string
+        purpose: string
+        statusLabel?: string
+        statusColor?: string
+    }> = [
+        {
+            event: 'SessionStart',
+            statusLabel: 'working',
+            statusColor: '#0d6efd',
+            purpose: 'Captures session id, cwd, and Tabby profile when a Claude Code session begins. Drives the "Open sessions" list above and seeds the tab as working.',
+        },
+        {
+            event: 'UserPromptSubmit',
+            statusLabel: 'working',
+            statusColor: '#0d6efd',
+            purpose: 'Fires when you press Enter on a prompt. Re-marks the tab as working in case you started a new turn.',
+        },
+        {
+            event: 'PreToolUse',
+            statusLabel: 'working',
+            statusColor: '#0d6efd',
+            purpose: 'Fires before every tool call (Read, Edit, Bash, …). Keeps the tab indicator alive while Claude is mid-task.',
+        },
+        {
+            event: 'PostToolUse',
+            statusLabel: 'working',
+            statusColor: '#0d6efd',
+            purpose: 'Fires after a tool call succeeds. Refreshes the working indicator with the latest tool name (shown in the tab title prefix when enabled).',
+        },
+        {
+            event: 'PostToolUseFailure',
+            statusLabel: 'error',
+            statusColor: '#dc3545',
+            purpose: 'Fires when a tool call errors out. Marks the tab as error and (if enabled) speaks the error phrase.',
+        },
+        {
+            event: 'Notification',
+            statusLabel: 'question',
+            statusColor: '#fd7e14',
+            purpose: 'Fires when Claude wants your attention without a permission prompt (e.g. permission timeout warning). Marks the tab as question and flashes the taskbar.',
+        },
+        {
+            event: 'PermissionRequest',
+            statusLabel: 'question',
+            statusColor: '#fd7e14',
+            purpose: 'Fires when Claude needs you to approve a tool. Marks the tab as question and triggers the question phrase.',
+        },
+        {
+            event: 'Stop',
+            statusLabel: 'done',
+            statusColor: '#198754',
+            purpose: 'Fires when Claude finishes its turn. Marks the tab done and triggers the done phrase. Auto-resets to idle after the configured timeout.',
+        },
+        {
+            event: 'SessionEnd',
+            statusLabel: 'idle',
+            statusColor: '#6c757d',
+            purpose: 'Fires when the Claude Code session ends (Ctrl+C, /quit, etc.). Moves the row from "Open sessions" to history.',
+        },
+    ]
     setupResult: { kind: 'ok' | 'error'; message: string } | null = null
     wslDistros: string[] = []
     private copiedTimer: ReturnType<typeof setTimeout> | null = null
@@ -1015,7 +1354,28 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         }
         if (this.currentBackend?.id === entry.id) {
             this.voicesLoading = false
+            this.syncFilterToSelection()
         }
+    }
+
+    /**
+     * Default the language filter to the family of whatever voice is already
+     * configured for the current backend. Falls back to 'en' if nothing is
+     * selected yet but English voices exist; otherwise clears the filter so
+     * the user can see everything.
+     */
+    private syncFilterToSelection(): void {
+        if (this.voiceTextFilter) return // user is actively filtering by text
+        const selectedId = this.getSelectedVoiceId()
+        if (selectedId) {
+            const current = this.currentVoices.find(v => v.id === selectedId)
+            if (current) {
+                this.voiceLanguageFilter = this.languageFamilyOf(current.locale)
+                return
+            }
+        }
+        const hasEnglish = this.currentVoices.some(v => this.languageFamilyOf(v.locale) === 'en')
+        this.voiceLanguageFilter = hasEnglish ? 'en' : ''
     }
 
     get currentBackend(): BackendOption | undefined {
@@ -1025,6 +1385,113 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
 
     get currentVoices(): TtsVoice[] {
         return this.currentBackend?.voices || []
+    }
+
+    /**
+     * Unique language families present in the current backend's voices, with
+     * English first and the rest alphabetised by display name. Each entry
+     * carries a count so the filter dropdown can show "English (47)" etc.
+     */
+    get voiceLanguageOptions(): { code: string; name: string; count: number }[] {
+        const counts = new Map<string, number>()
+        for (const v of this.currentVoices) {
+            const code = this.languageFamilyOf(v.locale)
+            counts.set(code, (counts.get(code) || 0) + 1)
+        }
+        const list: { code: string; name: string; count: number }[] = []
+        for (const [code, count] of counts) {
+            list.push({ code, name: this.displayLanguage(code), count })
+        }
+        list.sort((a, b) => {
+            if (a.code === 'en' && b.code !== 'en') return -1
+            if (b.code === 'en' && a.code !== 'en') return 1
+            return a.name.localeCompare(b.name)
+        })
+        return list
+    }
+
+    /**
+     * Voices grouped by full locale (e.g. "English (United States) — en-US"),
+     * filtered by the language + text inputs, with English locales sorted to
+     * the top. The currently-selected voice is always included so the
+     * <select> caption stays correct even if the filter would otherwise hide
+     * it.
+     */
+    get filteredAndGroupedVoices(): { groupLabel: string; voices: TtsVoice[] }[] {
+        const text = this.voiceTextFilter.trim().toLowerCase()
+        const lang = this.voiceLanguageFilter
+        const selectedId = this.getSelectedVoiceId()
+        const passesFilter = (v: TtsVoice): boolean => {
+            if (lang && this.languageFamilyOf(v.locale) !== lang) return false
+            if (text && !v.label.toLowerCase().includes(text)
+                && !(v.locale || '').toLowerCase().includes(text)) return false
+            return true
+        }
+        let filtered = this.currentVoices.filter(passesFilter)
+        this.filteredVoiceCount = filtered.length
+
+        // Always keep the current selection visible so the caption renders.
+        if (selectedId && !filtered.some(v => v.id === selectedId)) {
+            const current = this.currentVoices.find(v => v.id === selectedId)
+            if (current) filtered = [current, ...filtered]
+        }
+
+        filtered = filtered.slice().sort((a, b) => {
+            const aFamily = this.languageFamilyOf(a.locale)
+            const bFamily = this.languageFamilyOf(b.locale)
+            if (aFamily === 'en' && bFamily !== 'en') return -1
+            if (bFamily === 'en' && aFamily !== 'en') return 1
+            const al = (a.locale || '').toLowerCase()
+            const bl = (b.locale || '').toLowerCase()
+            if (al !== bl) return al.localeCompare(bl)
+            return a.label.localeCompare(b.label)
+        })
+
+        const groups = new Map<string, TtsVoice[]>()
+        for (const v of filtered) {
+            const key = v.locale || 'unknown'
+            if (!groups.has(key)) groups.set(key, [])
+            groups.get(key)!.push(v)
+        }
+        const result: { groupLabel: string; voices: TtsVoice[] }[] = []
+        for (const [locale, vs] of groups) {
+            result.push({ groupLabel: this.displayLocale(locale), voices: vs })
+        }
+        return result
+    }
+
+    clearVoiceFilters(): void {
+        this.voiceLanguageFilter = ''
+        this.voiceTextFilter = ''
+    }
+
+    private languageFamilyOf(locale: string | undefined): string {
+        if (!locale) return 'unknown'
+        return locale.split(/[-_]/)[0].toLowerCase()
+    }
+
+    private displayLanguage(code: string): string {
+        if (code === 'unknown') return 'Unknown'
+        try {
+            const name = this.languageDisplayNames?.of(code)
+            if (name && name !== code) return name
+        } catch { /* fall through */ }
+        return code
+    }
+
+    private displayLocale(locale: string): string {
+        if (locale === 'unknown') return 'Unknown'
+        const [lang, region] = locale.split(/[-_]/)
+        const langName = this.displayLanguage(lang.toLowerCase())
+        if (region) {
+            let regionName = region.toUpperCase()
+            try {
+                const r = this.regionDisplayNames?.of(region.toUpperCase())
+                if (r) regionName = r
+            } catch { /* fall through */ }
+            return `${langName} (${regionName}) — ${locale}`
+        }
+        return `${langName} — ${locale}`
     }
 
     getColor(status: string): string {
@@ -1078,10 +1545,23 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         this.config.store.claudeStatus.audio.backend = backendId
         this.save()
         this.voicesLoading = !this.currentBackend?.voices?.length
+        if (!this.voicesLoading) this.syncFilterToSelection()
     }
 
     save(): void {
         this.config.save()
+    }
+
+    /**
+     * Flip a boolean field on a config object and persist. Used by the
+     * <label> next to each <toggle> so clicking the label toggles the
+     * switch — Tabby's <toggle> isn't a native checkbox, so the standard
+     * `<label for="...">` pattern doesn't work on it.
+     */
+    toggleField(obj: any, key: string): void {
+        if (!obj) return
+        obj[key] = !obj[key]
+        this.save()
     }
 
     openHomepage(event: MouseEvent): void {
@@ -1359,6 +1839,19 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         } else {
             this.hooksStatus = 'missing'
         }
+    }
+
+    /**
+     * True if the event is wired up to our hook.js in at least one of the
+     * scanned settings.json files. Drives the green tick in the help popover
+     * so users can see at a glance which events they have coverage for.
+     */
+    isHookEventConfigured(event: string): boolean {
+        return this.hookLocations.some(
+            loc => loc.state !== 'no-file'
+                && loc.state !== 'error'
+                && !loc.missingEvents.includes(event),
+        )
     }
 
     private analyseSettingsFile(label: string, settingsPath: string): HookLocationStatus {
