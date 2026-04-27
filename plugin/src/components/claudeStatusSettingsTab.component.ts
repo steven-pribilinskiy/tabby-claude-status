@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core'
+import { Component, OnDestroy, OnInit } from '@angular/core'
 import { ConfigService } from 'tabby-core'
 import { AudioService } from '../services/audioService'
 import {
@@ -12,13 +12,24 @@ import {
 } from '../interfaces/types'
 import { TtsBackend, TtsVoice } from '../services/tts/tts.interface'
 import { SessionRestoreService } from '../services/sessionRestoreService'
+import { PiperInstallerService } from '../services/piperInstallerService'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PLUGIN_PACKAGE = require('../../package.json') as { version: string; homepage?: string }
 
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { execSync } from 'child_process'
+import { execFileSync, execSync } from 'child_process'
+
+export interface HookLocationStatus {
+    label: string
+    path: string
+    state: 'ok' | 'partial' | 'missing' | 'no-file' | 'error'
+    totalEvents: number
+    configuredEvents: number
+    missingEvents: string[]
+    error?: string
+}
 
 const HOOK_EVENTS = [
     'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
@@ -35,16 +46,52 @@ interface BackendOption {
 }
 
 @Component({
+    styles: [`
+        .session-table th.actions-col,
+        .session-table td.actions-col {
+            width: 1px;
+            white-space: nowrap;
+        }
+        .copyable-row {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 0.25rem;
+            max-width: 100%;
+        }
+        .copyable-row code {
+            word-break: break-all;
+        }
+        .copyable-row .copy-btn {
+            opacity: 0;
+            transition: opacity 0.1s ease-in;
+            border: 0;
+            line-height: 1;
+            color: var(--bs-secondary-color, #888);
+        }
+        .copyable-row:hover .copy-btn,
+        .copy-btn:focus {
+            opacity: 1;
+        }
+        .copy-btn:hover {
+            color: var(--bs-body-color, #ddd);
+        }
+        .copy-btn .fa-check {
+            color: var(--bs-success, #28a745);
+            opacity: 1;
+        }
+    `],
     template: `
         <div class="container-fluid">
-            <div class="d-flex align-items-baseline gap-2 mb-2">
+            <div class="d-flex align-items-center gap-2 mb-2">
                 <h3 class="mb-0">Claude Status</h3>
                 <span class="badge text-bg-secondary">v{{pluginVersion}}</span>
                 <a *ngIf="pluginHomepage"
-                   class="small text-muted ms-2"
+                   class="small text-muted ms-auto d-inline-flex align-items-center gap-1"
                    [attr.href]="pluginHomepage"
+                   [attr.title]="pluginHomepage"
                    (click)="openHomepage($event)">
-                    {{pluginHomepage}}
+                    <i class="fab fa-github"></i>
+                    <span>{{pluginRepoLabel}}</span>
                 </a>
             </div>
 
@@ -214,20 +261,63 @@ interface BackendOption {
                     </div>
                 </div>
 
-                <div *ngIf="currentBackend?.id === 'piper'" class="row mb-3">
-                    <div class="col-6">
-                        <label class="form-label">Piper executable</label>
-                        <input type="text" class="form-control"
-                            [(ngModel)]="config.store.claudeStatus.audio.piperExePath"
-                            (ngModelChange)="save()"
-                            placeholder="C:\\tools\\piper\\piper.exe" />
+                <div *ngIf="currentBackend?.id === 'piper'" class="mb-3">
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <span class="small text-muted">Piper home:</span>
+                        <a href="#" (click)="openUrl(piperInstaller.homepageUrl, $event)">
+                            {{piperInstaller.homepageUrl}}
+                        </a>
+                        <span class="small text-muted ms-3">Voices:</span>
+                        <a href="#" (click)="openUrl(piperInstaller.voicesUrl, $event)">
+                            huggingface.co/rhasspy/piper-voices
+                        </a>
                     </div>
-                    <div class="col-6">
-                        <label class="form-label">Piper model (.onnx)</label>
-                        <input type="text" class="form-control"
-                            [(ngModel)]="config.store.claudeStatus.audio.piperModelPath"
-                            (ngModelChange)="save()"
-                            placeholder="C:\\tools\\piper\\en_US-lessac-medium.onnx" />
+
+                    <div *ngIf="piperInstalled" class="alert alert-success py-2 mb-2">
+                        Piper is installed. Click "Reinstall" to re-download.
+                    </div>
+                    <div *ngIf="!piperInstalled && !piperInstalling" class="alert alert-warning py-2 mb-2">
+                        Piper isn't installed yet. Click the button below to download
+                        it and the default en_US-lessac-medium voice (~25 MB total).
+                        Not available via winget / scoop / choco, so we fetch it
+                        directly from the
+                        <a href="#" (click)="openUrl(piperInstaller.releasesUrl, $event)">official GitHub release</a>.
+                    </div>
+                    <div *ngIf="piperInstalling" class="alert alert-info py-2 mb-2">
+                        {{piperInstallStatus || 'Installing…'}}
+                    </div>
+                    <div *ngIf="piperInstallError" class="alert alert-danger py-2 mb-2">
+                        Install failed: {{piperInstallError}}
+                    </div>
+
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <button class="btn btn-sm btn-primary"
+                                [disabled]="piperInstalling"
+                                (click)="installPiper()">
+                            <span *ngIf="!piperInstalling && !piperInstalled">Install Piper + default voice</span>
+                            <span *ngIf="!piperInstalling && piperInstalled">Reinstall</span>
+                            <span *ngIf="piperInstalling">Installing…</span>
+                        </button>
+                        <span *ngIf="piperDetectedInstallers.length" class="text-muted small">
+                            Also detected: {{piperDetectedInstallers.join(', ')}} (Piper isn't in these repositories)
+                        </span>
+                    </div>
+
+                    <div class="row mb-2">
+                        <div class="col-6">
+                            <label class="form-label">Piper executable</label>
+                            <input type="text" class="form-control"
+                                [(ngModel)]="config.store.claudeStatus.audio.piperExePath"
+                                (ngModelChange)="save()"
+                                placeholder="C:\\tools\\piper\\piper.exe" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Piper model (.onnx)</label>
+                            <input type="text" class="form-control"
+                                [(ngModel)]="config.store.claudeStatus.audio.piperModelPath"
+                                (ngModelChange)="save()"
+                                placeholder="C:\\tools\\piper\\en_US-lessac-medium.onnx" />
+                        </div>
                     </div>
                 </div>
 
@@ -255,6 +345,28 @@ interface BackendOption {
                         (ngModelChange)="save()"
                     ></toggle>
                     <label class="ms-2">Play system beep alongside TTS</label>
+                </div>
+
+                <div class="form-group mb-3">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomRecording"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="ms-2">Mute while Zoom is recording</label>
+                    <div class="form-text">
+                        Detected via recent writes in the Zoom recording folder.
+                    </div>
+                </div>
+
+                <div class="form-group mb-3">
+                    <toggle
+                        [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomMeeting"
+                        (ngModelChange)="save()"
+                    ></toggle>
+                    <label class="ms-2">Mute while in any Zoom meeting</label>
+                    <div class="form-text">
+                        Detected via active UDP media sockets owned by Zoom.exe.
+                    </div>
                 </div>
 
                 <!-- Status Phrases -->
@@ -303,22 +415,12 @@ interface BackendOption {
                         (ngModelChange)="save()"
                     ></toggle>
                     <label class="ms-2">
-                        Auto-resume all saved sessions on Tabby launch
+                        Auto-resume open sessions on Tabby launch
                     </label>
                 </div>
 
                 <div class="row mb-3 ms-3">
-                    <div class="col-4">
-                        <label class="form-label">Retention (days)</label>
-                        <input
-                            type="number"
-                            class="form-control form-control-sm"
-                            min="1" max="90" step="1"
-                            [(ngModel)]="config.store.claudeStatus.sessionRestore.retentionDays"
-                            (ngModelChange)="save()"
-                        />
-                    </div>
-                    <div class="col-8">
+                    <div class="col-12 col-md-8">
                         <label class="form-label">Extra args (appended to <code>claude --resume &lt;id&gt;</code>)</label>
                         <input
                             type="text"
@@ -330,45 +432,220 @@ interface BackendOption {
                     </div>
                 </div>
 
-                <div class="d-flex align-items-center gap-2 mb-2 ms-3">
-                    <button class="btn btn-sm btn-outline-primary" (click)="resumeAllSessions()">
+                <div class="row mb-3 ms-3">
+                    <div class="col-12 col-md-8">
+                        <label class="form-label">
+                            Delay between <code>cd</code> and <code>claude --resume</code> (seconds)
+                        </label>
+                        <input
+                            type="number"
+                            class="form-control form-control-sm"
+                            style="max-width: 160px"
+                            min="0" max="10" step="0.1"
+                            [(ngModel)]="config.store.claudeStatus.sessionRestore.resumeCdDelaySec"
+                            (ngModelChange)="save()"
+                        />
+                        <div class="form-text small">
+                            Resume runs <code>cd "&lt;cwd&gt;"</code> first; if Claude says
+                            "No conversation found with session ID …" it usually means the
+                            shell hadn't finished cd-ing yet — bump this up.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex align-items-center gap-2 mb-2 ms-3 flex-wrap">
+                    <button class="btn btn-sm btn-outline-primary"
+                            [disabled]="openSessions.length === 0"
+                            (click)="resumeAllSessions()">
                         Resume all now
                     </button>
                     <button class="btn btn-sm btn-outline-secondary" (click)="refreshSessions()">
                         Refresh list
                     </button>
-                    <span class="text-muted small">{{sessions.length}} saved session(s)</span>
+                    <button class="btn btn-sm btn-outline-warning"
+                            [disabled]="openSessions.length === 0"
+                            (click)="markAllClosed()">
+                        Move all to history
+                    </button>
+                    <span class="text-muted small">
+                        {{openSessions.length}} open · {{closedSessions.length}} in history
+                    </span>
                 </div>
 
-                <table *ngIf="sessions.length > 0" class="table table-sm ms-3" style="max-width: 900px">
+                <div class="ms-3 mb-2" style="max-width: 900px">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="fas fa-search"></i></span>
+                        <input type="text"
+                               class="form-control"
+                               placeholder="Filter by path, session id, or title…"
+                               [(ngModel)]="sessionFilter"
+                               (ngModelChange)="onFilterChange()" />
+                        <button *ngIf="sessionFilter"
+                                class="btn btn-outline-secondary"
+                                type="button"
+                                title="Clear filter"
+                                (click)="clearFilter()">
+                            ✕
+                        </button>
+                    </div>
+                    <div *ngIf="sessionFilter" class="form-text small">
+                        {{filteredOpenSessions.length}} of {{openSessions.length}} open ·
+                        {{filteredClosedSessions.length}} of {{closedSessions.length}} in history match
+                    </div>
+                </div>
+
+                <h6 class="ms-3 mt-3">Open sessions</h6>
+                <table *ngIf="filteredOpenSessions.length > 0" class="table table-sm ms-3 session-table" style="max-width: 900px">
                     <thead>
                         <tr>
-                            <th style="width: 42%">Working directory</th>
-                            <th>Session id</th>
-                            <th>Last seen</th>
-                            <th style="width: 140px"></th>
+                            <th>Session</th>
+                            <th class="actions-col"></th>
                         </tr>
                     </thead>
                     <tbody>
-                        <tr *ngFor="let s of sessions">
+                        <tr *ngFor="let s of filteredOpenSessions">
                             <td>
-                                <code class="small">{{s.cwd}}</code>
-                                <div *ngIf="s.title" class="text-muted small">{{s.title}}</div>
+                                <div class="copyable-row">
+                                    <code class="small">{{s.cwd}}</code>
+                                    <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
+                                            type="button"
+                                            title="Copy path"
+                                            (click)="copyToClipboard(s.cwd, 'cwd-' + s.sessionId)">
+                                        <i class="fas"
+                                           [class.fa-copy]="copiedKey !== 'cwd-' + s.sessionId"
+                                           [class.fa-check]="copiedKey === 'cwd-' + s.sessionId"></i>
+                                    </button>
+                                </div>
+                                <div class="copyable-row small text-muted">
+                                    <code>{{s.sessionId}}</code>
+                                    <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
+                                            type="button"
+                                            title="Copy session id"
+                                            (click)="copyToClipboard(s.sessionId, 'sid-' + s.sessionId)">
+                                        <i class="fas"
+                                           [class.fa-copy]="copiedKey !== 'sid-' + s.sessionId"
+                                           [class.fa-check]="copiedKey === 'sid-' + s.sessionId"></i>
+                                    </button>
+                                </div>
+                                <div *ngIf="displayTitle(s)" class="small text-muted fst-italic">{{displayTitle(s)}}</div>
+                                <div *ngIf="displayProfileName(s)" class="small text-muted">
+                                    <i class="fas fa-terminal me-1"></i>{{displayProfileName(s)}}
+                                </div>
                             </td>
-                            <td><code class="small">{{s.sessionId}}</code></td>
-                            <td class="small">{{formatTs(s.lastSeen)}}</td>
-                            <td>
-                                <button class="btn btn-sm btn-outline-success"
-                                        (click)="resumeSession(s)">Resume</button>
-                                <button class="btn btn-sm btn-outline-danger ms-1"
-                                        (click)="forgetSession(s)">✕</button>
+                            <td class="actions-col text-end">
+                                <div class="d-flex gap-1 justify-content-end">
+                                    <button class="btn btn-sm btn-outline-success"
+                                            (click)="resumeSession(s)">Resume</button>
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            (click)="forgetSession(s)">✕</button>
+                                </div>
+                                <div class="small text-muted mt-1"
+                                     [attr.title]="formatTs(s.lastSeen)">
+                                    {{timeAgo(s.lastSeen)}}
+                                </div>
                             </td>
                         </tr>
                     </tbody>
                 </table>
+                <div *ngIf="openSessions.length === 0" class="ms-3 text-muted small mb-3">
+                    No open sessions. Run <code>claude</code> in a Tabby tab — a session
+                    appears here as soon as a hook event fires, and moves to history
+                    automatically when you close the tab or Claude ends the session.
+                </div>
+                <div *ngIf="openSessions.length > 0 && filteredOpenSessions.length === 0"
+                     class="ms-3 text-muted small mb-3">
+                    No open sessions match "{{sessionFilter}}".
+                </div>
 
-                <div *ngIf="sessions.length === 0" class="ms-3 text-muted small">
-                    No sessions recorded yet. Run <code>claude</code> in any Tabby tab — this list populates as hook events fire.
+                <div class="ms-3 mt-3" style="max-width: 900px">
+                    <button class="btn btn-sm btn-link ps-0 text-decoration-none"
+                            (click)="historyExpanded = !historyExpanded">
+                        <i class="fas" [class.fa-chevron-down]="historyExpanded"
+                                        [class.fa-chevron-right]="!historyExpanded"></i>
+                        History ({{closedSessions.length}}<span *ngIf="sessionFilter">, {{filteredClosedSessions.length}} match</span>)
+                    </button>
+
+                    <div *ngIf="historyExpanded" class="mt-2">
+                        <div class="row mb-2">
+                            <div class="col-6 col-md-4">
+                                <label class="form-label small">Retention (days)</label>
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm"
+                                    min="1" max="90" step="1"
+                                    [(ngModel)]="config.store.claudeStatus.sessionRestore.retentionDays"
+                                    (ngModelChange)="save()"
+                                />
+                                <div class="form-text small">
+                                    Historical (closed) sessions older than this are pruned.
+                                </div>
+                            </div>
+                        </div>
+
+                        <div *ngIf="filteredClosedSessions.length > 0"
+                             style="max-height: 360px; overflow-y: auto; border: 1px solid var(--bs-border-color, #333); border-radius: 4px;">
+                            <table class="table table-sm mb-0 session-table">
+                                <thead class="sticky-top"
+                                       style="background: var(--bs-body-bg, #1b1b1b); z-index: 1;">
+                                    <tr>
+                                        <th>Session</th>
+                                        <th class="actions-col"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr *ngFor="let s of filteredClosedSessions">
+                                        <td>
+                                            <div class="copyable-row">
+                                                <code class="small">{{s.cwd}}</code>
+                                                <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
+                                                        type="button"
+                                                        title="Copy path"
+                                                        (click)="copyToClipboard(s.cwd, 'cwd-' + s.sessionId)">
+                                                    <i class="fas"
+                                                       [class.fa-copy]="copiedKey !== 'cwd-' + s.sessionId"
+                                                       [class.fa-check]="copiedKey === 'cwd-' + s.sessionId"></i>
+                                                </button>
+                                            </div>
+                                            <div class="copyable-row small text-muted">
+                                                <code>{{s.sessionId}}</code>
+                                                <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
+                                                        type="button"
+                                                        title="Copy session id"
+                                                        (click)="copyToClipboard(s.sessionId, 'sid-' + s.sessionId)">
+                                                    <i class="fas"
+                                                       [class.fa-copy]="copiedKey !== 'sid-' + s.sessionId"
+                                                       [class.fa-check]="copiedKey === 'sid-' + s.sessionId"></i>
+                                                </button>
+                                            </div>
+                                            <div *ngIf="displayTitle(s)" class="small text-muted fst-italic">{{displayTitle(s)}}</div>
+                                <div *ngIf="displayProfileName(s)" class="small text-muted">
+                                    <i class="fas fa-terminal me-1"></i>{{displayProfileName(s)}}
+                                </div>
+                                        </td>
+                                        <td class="actions-col text-end">
+                                            <div class="d-flex gap-1 justify-content-end">
+                                                <button class="btn btn-sm btn-outline-success"
+                                                        (click)="resumeSession(s)">Resume</button>
+                                                <button class="btn btn-sm btn-outline-danger"
+                                                        (click)="forgetSession(s)">✕</button>
+                                            </div>
+                                            <div class="small text-muted mt-1"
+                                                 [attr.title]="formatTs(s.lastSeen)">
+                                                {{timeAgo(s.lastSeen)}}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div *ngIf="closedSessions.length === 0" class="text-muted small">
+                            No sessions in history yet.
+                        </div>
+                        <div *ngIf="closedSessions.length > 0 && filteredClosedSessions.length === 0"
+                             class="text-muted small">
+                            No history sessions match "{{sessionFilter}}".
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -377,18 +654,104 @@ interface BackendOption {
             <!-- Hook Setup -->
             <h5>Claude Code Hook Setup</h5>
             <p class="text-muted small">
-                Configures Claude Code to send status events to this plugin via hooks.
-                This writes to <code>~/.claude/settings.json</code>.
+                Claude Code sends status events to this plugin via hooks. We check
+                <code>~/.claude/settings.json</code> in Windows and in every detected WSL
+                distro (they have separate config files). The "Setup" button writes to
+                Windows; click the caret to pick a specific WSL distro or all locations.
+                WSL hooks invoke the Windows <code>node.exe</code> via <code>/mnt/c/…</code>
+                so you don't have to install Node inside the distro.
             </p>
 
-            <div class="d-flex align-items-center gap-3 mb-3">
-                <button class="btn btn-primary" (click)="setupHooks()">
-                    Setup Claude Hooks
+            <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
+                <div class="btn-group" (click)="$event.stopPropagation()">
+                    <button class="btn btn-primary"
+                            [disabled]="setupRunning"
+                            (click)="setupHooks({ target: 'windows' })">
+                        Setup Claude Hooks (Windows)
+                    </button>
+                    <button class="btn btn-primary dropdown-toggle dropdown-toggle-split"
+                            type="button"
+                            [disabled]="setupRunning"
+                            (click)="setupDropdownOpen = !setupDropdownOpen">
+                        <span class="caret">▾</span>
+                    </button>
+                    <ul class="dropdown-menu show" *ngIf="setupDropdownOpen"
+                        style="position: absolute; top: 100%; left: 0; z-index: 100;">
+                        <li>
+                            <a class="dropdown-item" href="#"
+                               (click)="onSetupChoice($event, { target: 'windows' })">
+                                Windows <code class="small">~/.claude/settings.json</code>
+                            </a>
+                        </li>
+                        <li *ngIf="wslDistros.length === 0" class="px-3 py-1 small text-muted">
+                            No WSL distros detected
+                        </li>
+                        <li *ngFor="let distro of wslDistros">
+                            <a class="dropdown-item" href="#"
+                               (click)="onSetupChoice($event, { target: 'wsl', distro: distro })">
+                                WSL {{distro}}
+                            </a>
+                        </li>
+                        <li *ngIf="wslDistros.length > 0"><hr class="dropdown-divider" /></li>
+                        <li *ngIf="wslDistros.length > 0">
+                            <a class="dropdown-item" href="#"
+                               (click)="onSetupChoice($event, { target: 'all' })">
+                                <strong>All locations (Windows + every WSL distro)</strong>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+                <button class="btn btn-sm btn-outline-secondary" (click)="checkHooks()">
+                    Re-check
                 </button>
-                <span *ngIf="hooksStatus === 'ok'" class="text-success">Hooks configured</span>
+                <span *ngIf="hooksStatus === 'ok'" class="text-success">All locations configured</span>
+                <span *ngIf="hooksStatus === 'partial'" class="text-warning">Partially configured</span>
                 <span *ngIf="hooksStatus === 'missing'" class="text-danger">Hooks not configured</span>
                 <span *ngIf="hooksStatus === 'error'" class="text-warning">Could not check hooks</span>
+                <span *ngIf="setupResult" class="small"
+                      [class.text-success]="setupResult.kind === 'ok'"
+                      [class.text-danger]="setupResult.kind === 'error'">
+                    {{setupResult.message}}
+                </span>
             </div>
+
+            <table *ngIf="hookLocations.length > 0"
+                   class="table table-sm mb-3" style="max-width: 900px">
+                <thead>
+                    <tr>
+                        <th style="width: 160px">Location</th>
+                        <th style="width: 90px">Status</th>
+                        <th>settings.json</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr *ngFor="let loc of hookLocations"
+                        [attr.title]="loc.state === 'partial' ? ('Missing events: ' + loc.missingEvents.join(', ')) : null">
+                        <td>{{loc.label}}</td>
+                        <td>
+                            <span *ngIf="loc.state === 'ok'" class="badge text-bg-success">
+                                {{loc.configuredEvents}}/{{loc.totalEvents}} ok
+                            </span>
+                            <span *ngIf="loc.state === 'partial'" class="badge text-bg-warning">
+                                {{loc.configuredEvents}}/{{loc.totalEvents}}
+                            </span>
+                            <span *ngIf="loc.state === 'missing'" class="badge text-bg-danger">
+                                0/{{loc.totalEvents}}
+                            </span>
+                            <span *ngIf="loc.state === 'no-file'" class="badge text-bg-secondary">
+                                no file
+                            </span>
+                            <span *ngIf="loc.state === 'error'" class="badge text-bg-warning">
+                                error
+                            </span>
+                        </td>
+                        <td>
+                            <code class="small">{{loc.path}}</code>
+                            <div *ngIf="loc.error" class="small text-muted">{{loc.error}}</div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
 
             <hr />
 
@@ -457,16 +820,22 @@ interface BackendOption {
         </div>
     `,
 })
-export class ClaudeStatusSettingsTabComponent implements OnInit {
+export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     colorStatuses = ['working', 'question', 'done', 'error'] as const
     phraseStatuses = ['done', 'question', 'error', 'working', 'idle'] as const
     emojiStatuses = ['working', 'question', 'done', 'error', 'idle'] as const
-    hooksStatus: 'ok' | 'missing' | 'error' | '' = ''
+    hooksStatus: 'ok' | 'partial' | 'missing' | 'error' | '' = ''
+    hookLocations: HookLocationStatus[] = []
 
     backends: BackendOption[] = []
     voicesLoading = false
     pluginVersion = PLUGIN_PACKAGE.version
     pluginHomepage = PLUGIN_PACKAGE.homepage || ''
+    pluginRepoLabel = (() => {
+        const url = PLUGIN_PACKAGE.homepage || ''
+        const m = url.match(/github\.com\/([^/]+)\/([^/#?]+)/)
+        return m ? `${m[1]}/${m[2]}` : url
+    })()
     sessions: ClaudeSessionRecord[] = []
 
     nodeInfo: { path: string | null; version: string | null; error: string | null } = {
@@ -481,10 +850,35 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
     hookJsExists = false
     tempFilePath = path.join(os.tmpdir(), 'tabby-claude-status.json')
 
+    piperInstalled = false
+    piperInstalling = false
+    piperInstallStatus = ''
+    piperInstallError = ''
+    piperDetectedInstallers: string[] = []
+
+    historyExpanded = false
+    sessionFilter = ''
+    copiedKey = ''
+    setupDropdownOpen = false
+    setupRunning = false
+    setupResult: { kind: 'ok' | 'error'; message: string } | null = null
+    wslDistros: string[] = []
+    private copiedTimer: ReturnType<typeof setTimeout> | null = null
+    private setupResultTimer: ReturnType<typeof setTimeout> | null = null
+    private refreshTicker: ReturnType<typeof setInterval> | null = null
+    private docClickListener = (ev: MouseEvent) => {
+        if (!this.setupDropdownOpen) return
+        const target = ev.target as HTMLElement | null
+        if (!target?.closest?.('.btn-group')) {
+            this.setupDropdownOpen = false
+        }
+    }
+
     constructor(
         public config: ConfigService,
         private audioService: AudioService,
         private sessionRestore: SessionRestoreService,
+        public piperInstaller: PiperInstallerService,
     ) {}
 
     ngOnInit(): void {
@@ -516,6 +910,11 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
         if (!this.config.store.claudeStatus.sessionRestore) {
             this.config.store.claudeStatus.sessionRestore = { ...DEFAULT_SESSION_RESTORE_CONFIG }
         }
+        // Backfill new fields for users upgrading from <=1.2.0
+        if (this.config.store.claudeStatus.sessionRestore.resumeCdDelaySec == null) {
+            this.config.store.claudeStatus.sessionRestore.resumeCdDelaySec =
+                DEFAULT_SESSION_RESTORE_CONFIG.resumeCdDelaySec
+        }
         this.refreshSessions()
 
         // Seed backend list (availability + voice probes are kicked off async)
@@ -540,7 +939,64 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
         this.hookJsExists = fs.existsSync(this.hookJsPath)
         this.nodeInfo = this.detectNodePath()
 
+        this.wslDistros = process.platform === 'win32' ? this.getWslDistros() : []
         this.checkHooks()
+        this.refreshPiperState()
+        document.addEventListener('click', this.docClickListener, true)
+
+        // Keep the sessions table fresh while the settings tab is open so
+        // sessions that get closed elsewhere (tab-close in another Tabby
+        // window, SessionEnd hook, etc.) move to history without needing a
+        // manual refresh. 5s is plenty — this is cheap (single JSON read).
+        this.refreshTicker = setInterval(() => {
+            this.refreshSessions()
+        }, 5000)
+    }
+
+    refreshPiperState(): void {
+        this.piperInstalled = this.piperInstaller.isInstalled()
+        this.piperInstaller
+            .detectInstallers()
+            .then(list => {
+                this.piperDetectedInstallers = list
+            })
+            .catch(() => {
+                this.piperDetectedInstallers = []
+            })
+    }
+
+    async installPiper(): Promise<void> {
+        this.piperInstalling = true
+        this.piperInstallError = ''
+        this.piperInstallStatus = 'Starting install…'
+        try {
+            const paths = await this.piperInstaller.install(p => {
+                this.piperInstallStatus = p.message
+            })
+            // Auto-fill the plugin config with the paths we just installed.
+            this.config.store.claudeStatus.audio.piperExePath = paths.exePath
+            this.config.store.claudeStatus.audio.piperModelPath = paths.modelPath
+            this.save()
+            this.piperInstalled = true
+            this.piperInstallStatus = `Installed at ${paths.installDir}`
+        } catch (e: any) {
+            this.piperInstallError = e?.message || String(e)
+            this.piperInstallStatus = ''
+        } finally {
+            this.piperInstalling = false
+        }
+    }
+
+    openUrl(url: string, event?: MouseEvent): void {
+        if (event) event.preventDefault()
+        if (!url) return
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { shell } = require('electron')
+            shell.openExternal(url)
+        } catch {
+            if (typeof window !== 'undefined') window.open(url, '_blank')
+        }
     }
 
     private async probeBackend(entry: BackendOption): Promise<void> {
@@ -599,14 +1055,22 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
 
     onVoiceChange(voiceId: string): void {
         const backendId = this.config.store.claudeStatus.audio.backend as TtsBackendId
-        if (!this.config.store.claudeStatus.audio.voicesByBackend) {
-            this.config.store.claudeStatus.audio.voicesByBackend = {}
+        // Replace the whole voicesByBackend object so Tabby's config-save sees
+        // a reference change — some save paths miss deep mutations.
+        this.config.store.claudeStatus.audio.voicesByBackend = {
+            ...(this.config.store.claudeStatus.audio.voicesByBackend || {}),
+            [backendId]: voiceId,
         }
-        this.config.store.claudeStatus.audio.voicesByBackend[backendId] = voiceId
         // Keep legacy field in sync for Web Speech so old code paths don't regress.
         if (backendId === 'webspeech') {
             this.config.store.claudeStatus.audio.voiceName = voiceId
         }
+        console.info(
+            '[claude-status] Voice saved for backend',
+            backendId,
+            '→',
+            voiceId || '(default)',
+        )
         this.save()
     }
 
@@ -645,6 +1109,140 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
 
     refreshSessions(): void {
         this.sessions = this.sessionRestore.list()
+    }
+
+    get openSessions(): ClaudeSessionRecord[] {
+        return this.sessions.filter(s => !s.closed)
+    }
+
+    get closedSessions(): ClaudeSessionRecord[] {
+        return this.sessions.filter(s => !!s.closed)
+    }
+
+    get filteredOpenSessions(): ClaudeSessionRecord[] {
+        return this.applySessionFilter(this.openSessions)
+    }
+
+    get filteredClosedSessions(): ClaudeSessionRecord[] {
+        return this.applySessionFilter(this.closedSessions)
+    }
+
+    private applySessionFilter(list: ClaudeSessionRecord[]): ClaudeSessionRecord[] {
+        const q = this.sessionFilter.trim().toLowerCase()
+        if (!q) return list
+        return list.filter(s => {
+            const title = this.displayTitle(s)
+            return (
+                (s.cwd && s.cwd.toLowerCase().includes(q)) ||
+                (s.sessionId && s.sessionId.toLowerCase().includes(q)) ||
+                (!!title && title.toLowerCase().includes(q))
+            )
+        })
+    }
+
+    /**
+     * Title to render for a session row. For open sessions we ask the
+     * decorator for the live tab title (Claude rewrites it during the
+     * session); for closed sessions we just use the persisted snapshot.
+     */
+    displayTitle(s: ClaudeSessionRecord): string | undefined {
+        if (!s.closed) {
+            const live = this.sessionRestore.getLiveTitle(s.sessionId)
+            if (live) return live
+        }
+        return s.title
+    }
+
+    /**
+     * Tabby profile that will own the resumed tab. Live for open sessions
+     * (so renames/profile-edits propagate immediately), persisted snapshot
+     * for history rows. Returns undefined for legacy records that pre-date
+     * the profile-capture upgrade — the row just hides the row's profile
+     * line in that case.
+     */
+    displayProfileName(s: ClaudeSessionRecord): string | undefined {
+        if (!s.closed) {
+            const live = this.sessionRestore.getLiveProfile(s.sessionId)
+            if (live?.name) return live.name
+        }
+        return s.profileName
+    }
+
+    onFilterChange(): void {
+        // Auto-expand history when typing so matches there become visible.
+        if (this.sessionFilter.trim() && this.filteredClosedSessions.length > 0) {
+            this.historyExpanded = true
+        }
+    }
+
+    clearFilter(): void {
+        this.sessionFilter = ''
+    }
+
+    copyToClipboard(text: string, key: string): void {
+        if (!text) return
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { clipboard } = require('electron')
+            clipboard.writeText(text)
+        } catch {
+            try {
+                navigator.clipboard?.writeText(text)
+            } catch {
+                /* nothing else to try */
+            }
+        }
+        this.copiedKey = key
+        if (this.copiedTimer) clearTimeout(this.copiedTimer)
+        this.copiedTimer = setTimeout(() => {
+            this.copiedKey = ''
+            this.copiedTimer = null
+        }, 1200)
+    }
+
+    markAllClosed(): void {
+        const n = this.sessionRestore.markAllClosed()
+        console.info(`[claude-status] Moved ${n} session(s) to history`)
+        this.refreshSessions()
+    }
+
+    /**
+     * Human-friendly relative timestamp ("3m ago", "2h ago"). The full
+     * datetime is surfaced via the `title` tooltip on the same element so
+     * the user can hover to see the exact time.
+     */
+    timeAgo(ts: number): string {
+        if (!ts) return '—'
+        const delta = Date.now() - ts
+        if (delta < 0) return 'just now'
+        const s = Math.floor(delta / 1000)
+        if (s < 45) return `${s}s ago`
+        const m = Math.floor(s / 60)
+        if (m < 60) return `${m}m ago`
+        const h = Math.floor(m / 60)
+        if (h < 24) return `${h}h ago`
+        const d = Math.floor(h / 24)
+        if (d < 30) return `${d}d ago`
+        const mo = Math.floor(d / 30)
+        if (mo < 12) return `${mo}mo ago`
+        const y = Math.floor(d / 365)
+        return `${y}y ago`
+    }
+
+    ngOnDestroy(): void {
+        if (this.refreshTicker) {
+            clearInterval(this.refreshTicker)
+            this.refreshTicker = null
+        }
+        if (this.copiedTimer) {
+            clearTimeout(this.copiedTimer)
+            this.copiedTimer = null
+        }
+        if (this.setupResultTimer) {
+            clearTimeout(this.setupResultTimer)
+            this.setupResultTimer = null
+        }
+        document.removeEventListener('click', this.docClickListener, true)
     }
 
     async resumeSession(session: ClaudeSessionRecord): Promise<void> {
@@ -709,88 +1307,339 @@ export class ClaudeStatusSettingsTabComponent implements OnInit {
         return path.resolve(__dirname, 'hook.js')
     }
 
+    /**
+     * Scan every settings.json we can get to — Windows home dir plus one per
+     * active WSL distro — and report how many of `HOOK_EVENTS` are wired up
+     * in each. Matching is done by substring (`tabby-claude-status` +
+     * `hook.js`) rather than exact absolute path, so a command like
+     * `"/mnt/c/Program Files/nodejs/node.exe" "C:\\...\\tabby-claude-status\\hook.js"`
+     * inside a WSL settings file is correctly recognised as "our hook".
+     */
     checkHooks(): void {
-        try {
-            const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
-            if (!fs.existsSync(settingsPath)) {
-                this.hooksStatus = 'missing'
-                return
+        const locations: HookLocationStatus[] = []
+
+        // Windows ~/.claude/settings.json
+        locations.push(
+            this.analyseSettingsFile('Windows', path.join(os.homedir(), '.claude', 'settings.json')),
+        )
+
+        // Each WSL distro has its own ~/.claude/settings.json. Enumerate via
+        // `wsl.exe -l -q` and read via the \\wsl.localhost UNC mount.
+        if (process.platform === 'win32') {
+            for (const distro of this.getWslDistros()) {
+                const settingsPath = this.findWslSettingsPath(distro)
+                if (settingsPath) {
+                    locations.push(this.analyseSettingsFile(`WSL ${distro}`, settingsPath))
+                } else {
+                    locations.push({
+                        label: `WSL ${distro}`,
+                        path: `\\\\wsl.localhost\\${distro}\\home\\<user>\\.claude\\settings.json`,
+                        state: 'no-file',
+                        totalEvents: HOOK_EVENTS.length,
+                        configuredEvents: 0,
+                        missingEvents: [...HOOK_EVENTS],
+                    })
+                }
             }
-            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
-            const hooks = settings.hooks || {}
-            const hookJsPath = this.hookJsPath || this.getHookJsPath()
-
-            // Match on hook.js path presence in command, not exact string.
-            // This handles both old `node "path"` and new `"/abs/node" "path"` formats.
-            const allConfigured = HOOK_EVENTS.every(event => {
-                const matcherGroups: any[] = hooks[event] || []
-                return matcherGroups.some((group: any) => {
-                    const innerHooks: any[] = group.hooks || []
-                    return innerHooks.some((h: any) => h.type === 'command' && h.command.includes(hookJsPath))
-                })
-            })
-
-            this.hooksStatus = allConfigured ? 'ok' : 'missing'
-        } catch (_) {
-            this.hooksStatus = 'error'
         }
-    }
 
-    setupHooks(): void {
-        try {
-            const claudeDir = path.join(os.homedir(), '.claude')
-            if (!fs.existsSync(claudeDir)) {
-                fs.mkdirSync(claudeDir, { recursive: true })
-            }
+        this.hookLocations = locations
 
-            const settingsPath = path.join(claudeDir, 'settings.json')
-            let settings: any = {}
-            if (fs.existsSync(settingsPath)) {
-                settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
-            }
-
-            if (!settings.hooks) {
-                settings.hooks = {}
-            }
-
-            const hookJsPath = this.hookJsPath || this.getHookJsPath()
-
-            // Use absolute Node.js path when available, fall back to bare `node`
-            const nodeCmd = this.nodeInfo.path ? `"${this.nodeInfo.path}"` : 'node'
-            const hookCmd = { type: 'command', command: `${nodeCmd} "${hookJsPath}"` }
-
-            // New format: hooks[event] = [ { hooks: [ { type, command } ] } ]
-            for (const event of HOOK_EVENTS) {
-                if (!settings.hooks[event]) {
-                    settings.hooks[event] = []
-                }
-                const matcherGroups: any[] = settings.hooks[event]
-
-                // Find existing matcher group that contains our hook.js command
-                let found = false
-                for (const group of matcherGroups) {
-                    if (!group.hooks) continue
-                    const idx = group.hooks.findIndex(
-                        (h: any) => h.type === 'command' && h.command.includes('hook.js'),
-                    )
-                    if (idx >= 0) {
-                        group.hooks[idx] = hookCmd
-                        found = true
-                        break
-                    }
-                }
-
-                if (!found) {
-                    // Add a new matcher group (no matcher = match all)
-                    matcherGroups.push({ hooks: [hookCmd] })
-                }
-            }
-
-            fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+        // Aggregate: ok if every location is ok; partial if any location has
+        // ≥1 event configured; missing otherwise.
+        const anyOk = locations.some(l => l.state === 'ok')
+        const anyPartial = locations.some(l => l.configuredEvents > 0)
+        const allOk = locations.length > 0 && locations.every(l => l.state === 'ok')
+        if (allOk) {
             this.hooksStatus = 'ok'
-        } catch (e) {
-            console.error('[claude-status] Failed to setup hooks:', e)
+        } else if (anyOk || anyPartial) {
+            this.hooksStatus = 'partial'
+        } else if (locations.some(l => l.state === 'error')) {
             this.hooksStatus = 'error'
+        } else {
+            this.hooksStatus = 'missing'
         }
     }
+
+    private analyseSettingsFile(label: string, settingsPath: string): HookLocationStatus {
+        const base: HookLocationStatus = {
+            label,
+            path: settingsPath,
+            state: 'no-file',
+            totalEvents: HOOK_EVENTS.length,
+            configuredEvents: 0,
+            missingEvents: [...HOOK_EVENTS],
+        }
+        try {
+            if (!fs.existsSync(settingsPath)) return base
+            const raw = fs.readFileSync(settingsPath, 'utf-8')
+            const settings = JSON.parse(raw)
+            const hooks = (settings && settings.hooks) || {}
+            const missing: string[] = []
+            let configured = 0
+            for (const event of HOOK_EVENTS) {
+                const groups: any[] = hooks[event] || []
+                const hit = groups.some((group: any) => {
+                    const inner: any[] = (group && group.hooks) || []
+                    return inner.some(h => this.isTabbyHookCommand(h && h.command))
+                })
+                if (hit) configured++
+                else missing.push(event)
+            }
+            return {
+                ...base,
+                state:
+                    configured === HOOK_EVENTS.length
+                        ? 'ok'
+                        : configured > 0
+                          ? 'partial'
+                          : 'missing',
+                configuredEvents: configured,
+                missingEvents: missing,
+            }
+        } catch (e: any) {
+            return { ...base, state: 'error', error: e?.message || String(e) }
+        }
+    }
+
+    /**
+     * Recognise a hook command that invokes this plugin's hook.js, no matter
+     * which node binary (win32 node, WSL node, /mnt/c/... passthrough) or
+     * path style (forward/backward slashes, escaped backslashes) it uses.
+     */
+    private isTabbyHookCommand(command: unknown): boolean {
+        if (typeof command !== 'string' || !command) return false
+        const lower = command.toLowerCase().replace(/\\\\/g, '\\')
+        return lower.includes('tabby-claude-status') && lower.includes('hook.js')
+    }
+
+    private getWslDistros(): string[] {
+        try {
+            const out = execFileSync('wsl.exe', ['-l', '-q'], {
+                encoding: 'utf16le',
+                timeout: 5000,
+                windowsHide: true,
+            })
+            return out
+                .split(/\r?\n/)
+                .map(s => s.replace(/\0/g, '').trim())
+                .filter(Boolean)
+                .filter(d => !/^(rancher-desktop|docker-desktop)/i.test(d))
+        } catch {
+            return []
+        }
+    }
+
+    /**
+     * WSL distros expose their filesystem at `\\wsl.localhost\<distro>\`.
+     * We don't know the Linux username up-front (it differs from the Windows
+     * USERPROFILE), so we enumerate /home and look for the first entry that
+     * has a `.claude/settings.json` — matches the way Claude Code discovers
+     * its own config.
+     */
+    private findWslSettingsPath(distro: string): string | null {
+        const homeRoot = `\\\\wsl.localhost\\${distro}\\home`
+        let users: string[] = []
+        try {
+            users = fs.readdirSync(homeRoot)
+        } catch {
+            return null
+        }
+        for (const user of users) {
+            const candidate = path.join(homeRoot, user, '.claude', 'settings.json')
+            try {
+                if (fs.existsSync(candidate)) return candidate
+            } catch {
+                /* permission hiccup — try next */
+            }
+        }
+        // Root-only distros (rare) keep their settings at /root/.claude/.
+        const rootCandidate = `\\\\wsl.localhost\\${distro}\\root\\.claude\\settings.json`
+        try {
+            if (fs.existsSync(rootCandidate)) return rootCandidate
+        } catch {
+            /* ignore */
+        }
+        return null
+    }
+
+    onSetupChoice(event: MouseEvent, choice: SetupChoice): void {
+        event.preventDefault()
+        this.setupDropdownOpen = false
+        this.setupHooks(choice)
+    }
+
+    setupHooks(choice: SetupChoice): void {
+        if (this.setupRunning) return
+        this.setupRunning = true
+        this.setupResult = null
+
+        const targets: SetupTarget[] = []
+        if (choice.target === 'windows' || choice.target === 'all') {
+            targets.push({ kind: 'windows', label: 'Windows' })
+        }
+        if (choice.target === 'wsl' && choice.distro) {
+            const settingsPath = this.findWslSettingsPath(choice.distro)
+            targets.push({
+                kind: 'wsl',
+                label: `WSL ${choice.distro}`,
+                distro: choice.distro,
+                settingsPath: settingsPath ?? this.guessWslSettingsPath(choice.distro),
+            })
+        }
+        if (choice.target === 'all') {
+            for (const distro of this.wslDistros) {
+                const settingsPath = this.findWslSettingsPath(distro)
+                targets.push({
+                    kind: 'wsl',
+                    label: `WSL ${distro}`,
+                    distro,
+                    settingsPath: settingsPath ?? this.guessWslSettingsPath(distro),
+                })
+            }
+        }
+
+        const successes: string[] = []
+        const failures: string[] = []
+        for (const target of targets) {
+            try {
+                this.writeHooksToTarget(target)
+                successes.push(target.label)
+            } catch (e: any) {
+                console.error(`[claude-status] Failed to setup hooks for ${target.label}:`, e)
+                failures.push(`${target.label}: ${e?.message || e}`)
+            }
+        }
+
+        this.setupRunning = false
+        if (failures.length === 0) {
+            this.setupResult = {
+                kind: 'ok',
+                message: `Configured ${successes.join(', ')}`,
+            }
+        } else {
+            this.setupResult = {
+                kind: 'error',
+                message: `Failed: ${failures.join(' · ')}`,
+            }
+        }
+        if (this.setupResultTimer) clearTimeout(this.setupResultTimer)
+        this.setupResultTimer = setTimeout(() => {
+            this.setupResult = null
+            this.setupResultTimer = null
+        }, 6000)
+        this.checkHooks()
+    }
+
+    private writeHooksToTarget(target: SetupTarget): void {
+        const settingsPath = target.kind === 'windows'
+            ? path.join(os.homedir(), '.claude', 'settings.json')
+            : target.settingsPath
+        if (!settingsPath) {
+            throw new Error('Could not resolve settings.json path')
+        }
+
+        const dir = path.dirname(settingsPath)
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true })
+        }
+
+        let settings: any = {}
+        if (fs.existsSync(settingsPath)) {
+            settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+        }
+        if (!settings.hooks) settings.hooks = {}
+
+        const hookCmd = this.buildHookCmd(target.kind)
+
+        for (const event of HOOK_EVENTS) {
+            if (!settings.hooks[event]) settings.hooks[event] = []
+            const matcherGroups: any[] = settings.hooks[event]
+
+            // Replace any existing tabby-claude-status hook in place. Match by
+            // our `isTabbyHookCommand` so we don't accidentally clobber the
+            // user's other hook.js entries (e.g. agent-flow/hook.js,
+            // Claude-Code-Agent-Monitor/hook-handler.js) — that was the bug
+            // before, where any command containing "hook.js" got overwritten.
+            let found = false
+            for (const group of matcherGroups) {
+                if (!group.hooks) continue
+                const idx = group.hooks.findIndex(
+                    (h: any) => h?.type === 'command' && this.isTabbyHookCommand(h.command),
+                )
+                if (idx >= 0) {
+                    group.hooks[idx] = hookCmd
+                    found = true
+                    break
+                }
+            }
+            if (!found) {
+                matcherGroups.push({ hooks: [hookCmd] })
+            }
+        }
+
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+    }
+
+    /**
+     * Build the hook command string for the requested target.
+     *
+     * Windows: native `"<node.exe>" "<hook.js>"` — both args are JS strings
+     * with single backslashes; JSON.stringify escapes them on write.
+     *
+     * WSL: bash invokes the Windows `node.exe` via the `/mnt/<drive>/…`
+     * passthrough, then passes the Windows `hook.js` path as its argv. Inside
+     * bash double quotes, `\\` collapses to `\` — so we need to write `\\`
+     * pairs to the JSON file, which means our JS string holds doubled
+     * backslashes (`\\\\` source → `\\` in memory → `\\\\` on disk).
+     */
+    private buildHookCmd(kind: 'windows' | 'wsl'): { type: 'command'; command: string } {
+        const hookJs = this.hookJsPath || this.getHookJsPath()
+        if (kind === 'windows') {
+            const node = this.nodeInfo.path ? `"${this.nodeInfo.path}"` : 'node'
+            return { type: 'command', command: `${node} "${hookJs}"` }
+        }
+        const nodeWindowsPath = this.nodeInfo.path || 'C:\\Program Files\\nodejs\\node.exe'
+        const nodeWslPath = this.toWslMountPath(nodeWindowsPath)
+        // Double the backslashes so bash's `"…"` quote-unescaping yields a
+        // single backslash per separator when calling node.exe.
+        const hookJsForBash = hookJs.replace(/\\/g, '\\\\')
+        return { type: 'command', command: `"${nodeWslPath}" "${hookJsForBash}"` }
+    }
+
+    private toWslMountPath(winPath: string): string {
+        const m = winPath.match(/^([A-Za-z]):[\\/](.*)$/)
+        if (!m) return winPath
+        return `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`
+    }
+
+    /**
+     * Path to use when `findWslSettingsPath` returns null (no settings.json
+     * exists yet) — we want to create one in the canonical location for the
+     * distro's primary user.
+     */
+    private guessWslSettingsPath(distro: string): string {
+        const homeRoot = `\\\\wsl.localhost\\${distro}\\home`
+        try {
+            const users = fs.readdirSync(homeRoot)
+            if (users.length > 0) {
+                return path.join(homeRoot, users[0], '.claude', 'settings.json')
+            }
+        } catch {
+            /* fall through */
+        }
+        return `\\\\wsl.localhost\\${distro}\\root\\.claude\\settings.json`
+    }
+}
+
+interface SetupChoice {
+    target: 'windows' | 'wsl' | 'all'
+    distro?: string
+}
+
+interface SetupTarget {
+    kind: 'windows' | 'wsl'
+    label: string
+    distro?: string
+    settingsPath?: string
 }

@@ -57,6 +57,25 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         super()
         this.configService.debug('ClaudeStatusDecorator initialized')
 
+        // Resolve live tab titles for the settings tab. We own the
+        // session→terminal mapping, so we plug a getter into SessionRestore
+        // rather than leaking the map out. Reads `terminal.title` at call
+        // time, so what the settings tab renders matches what's on the
+        // tab right now — not what the title happened to be when the
+        // SessionStart hook fired.
+        this.sessionRestore.setLiveTitleResolver((sessionId) => {
+            const terminal = this.sessionTerminals.get(sessionId)
+            if (!terminal) return undefined
+            const baseTitle = this.baseTitles.get(terminal)
+            return baseTitle ?? (terminal as any).title
+        })
+        this.sessionRestore.setLiveProfileResolver((sessionId) => {
+            const terminal = this.sessionTerminals.get(sessionId)
+            const profile = terminal ? (terminal as any).profile : undefined
+            if (!profile) return undefined
+            return { id: profile.id, name: profile.name, type: profile.type }
+        })
+
         // Auto-resume on launch. Deferred so Tabby has time to finish its own
         // tab restoration (if any) before we pile on more tabs.
         const restoreCfg = this.configService.getSessionRestoreConfig()
@@ -107,9 +126,20 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         this.terminalPids.delete(terminal)
         this.terminals.delete(terminal)
 
-        // Clean up session mappings pointing to this terminal
+        // Push any Claude sessions that were running in this tab into the
+        // closed/history bucket. Relying on Claude Code's `SessionEnd` hook
+        // alone is unreliable — if the user closes the Tabby tab while
+        // Claude is still running, no SessionEnd fires. The tab-close event
+        // is the authoritative "this session is no longer open" signal.
         for (const [session, t] of this.sessionTerminals) {
-            if (t === terminal) this.sessionTerminals.delete(session)
+            if (t === terminal) {
+                this.sessionTerminals.delete(session)
+                try {
+                    this.sessionRestore.markClosed(session)
+                } catch (err) {
+                    console.error('[claude-status] markClosed on detach failed:', err)
+                }
+            }
         }
 
         if (this.terminals.size === 0) {
@@ -204,11 +234,18 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 metadata: data,
             }
 
-            // Record the session for opt-in restore. No-op when disabled.
-            if (data.session && data.cwd) {
-                const terminal = this.findTerminalForEvent(data)
-                const title = terminal ? (terminal as any).title : undefined
-                this.sessionRestore.record(data.session, data.cwd, title)
+            // Feed the session-restore service. SessionEnd flips the record
+            // to closed so auto-resume skips it; every other event reopens
+            // and refreshes lastSeen.
+            if (data.session) {
+                if (data.event === 'SessionEnd') {
+                    this.sessionRestore.markClosed(data.session)
+                } else if (data.cwd) {
+                    const terminal = this.findTerminalForEvent(data)
+                    const title = terminal ? (terminal as any).title : undefined
+                    const profile = terminal ? (terminal as any).profile : undefined
+                    this.sessionRestore.record(data.session, data.cwd, title, profile)
+                }
             }
 
             // Find the right terminal for this event
@@ -216,10 +253,14 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             if (terminal) {
                 this.handleStatusEvent(terminal, event)
             } else {
-                // Fallback: update all terminals
-                for (const t of this.terminals) {
-                    this.handleStatusEvent(t, event)
-                }
+                // Claude fired from a non-Tabby terminal (VS Code, Windows
+                // Terminal, plain pwsh…). Don't fan per-tab decorations out
+                // to unrelated Tabby tabs — that just lights up every tab in
+                // red/green for a session that has nothing to do with them.
+                // Still emit the global effects (audio + taskbar) so the
+                // user hears "I'm Done" etc. regardless of host terminal.
+                this.applyTaskbar(event.status, this.configService.getDisplayConfig())
+                this.audioService.speak(event.status)
             }
         } catch (_) {
             // File might be mid-write

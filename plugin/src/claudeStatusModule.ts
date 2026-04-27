@@ -12,7 +12,9 @@ import { ClaudeStatusSettingsTabProvider } from './providers/settingsTabProvider
 import { StatusParserService } from './services/statusParserService'
 import { ClaudeStatusConfigService } from './services/configService'
 import { AudioService } from './services/audioService'
+import { PiperInstallerService } from './services/piperInstallerService'
 import { SessionRestoreService } from './services/sessionRestoreService'
+import { ZoomStateService } from './services/zoomStateService'
 import { ClaudeStatusSettingsTabComponent } from './components/claudeStatusSettingsTab.component'
 
 @NgModule({
@@ -22,6 +24,8 @@ import { ClaudeStatusSettingsTabComponent } from './components/claudeStatusSetti
         StatusParserService,
         ClaudeStatusConfigService,
         AudioService,
+        ZoomStateService,
+        PiperInstallerService,
         SessionRestoreService,
         { provide: ConfigProvider, useClass: ClaudeStatusConfigProvider, multi: true },
         { provide: TerminalDecorator, useClass: ClaudeStatusDecorator, multi: true },

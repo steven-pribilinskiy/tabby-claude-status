@@ -48,6 +48,17 @@ export interface ClaudeStatusAudioConfig {
     /** Absolute path to a .onnx Piper model file. Empty = disabled. */
     piperModelPath: string
     systemBeep: boolean
+    /**
+     * When true, TTS stays silent while Zoom is actively recording a meeting
+     * to the local disk. Detection is best-effort via the recording folder's
+     * recent write activity.
+     */
+    muteDuringZoomRecording: boolean
+    /**
+     * When true, TTS stays silent while Zoom is in any meeting (recording or
+     * not) — detected via active UDP media sockets owned by Zoom.exe.
+     */
+    muteDuringZoomMeeting: boolean
     statusTexts: {
         done: string
         question: string
@@ -114,6 +125,8 @@ export const DEFAULT_AUDIO_CONFIG: ClaudeStatusAudioConfig = {
     piperExePath: '',
     piperModelPath: '',
     systemBeep: false,
+    muteDuringZoomRecording: true,
+    muteDuringZoomMeeting: true,
     statusTexts: {
         done: "I'm Done",
         question: 'Question',
@@ -156,10 +169,28 @@ export interface ClaudeSessionRecord {
     sessionId: string
     cwd: string
     title?: string
+    /**
+     * Tabby profile that owned the original tab — id is the persistent
+     * profile identifier (looked up via ProfilesService.getProfiles()).
+     * Without this we resumed every session through the default profile,
+     * which sent Windows-cwd sessions into WSL.
+     */
+    profileId?: string
+    /** Display name of the original profile, kept for the UI even if the profile is later deleted. */
+    profileName?: string
+    /** Profile family ('local', 'ssh', 'serial', …) — used as a fallback if the id lookup fails. */
+    profileType?: string
     /** Unix ms at which we last saw a hook event for this session. */
     lastSeen: number
     /** Unix ms at which we first recorded this session. */
     firstSeen: number
+    /**
+     * True if this session has explicitly ended (Claude Code fired
+     * `SessionEnd`) — or the user marked it closed from the UI. Auto-resume
+     * skips closed sessions so only sessions that were still open when Tabby
+     * last ran get resurrected.
+     */
+    closed?: boolean
 }
 
 /**
@@ -175,6 +206,17 @@ export interface ClaudeSessionRestoreConfig {
     retentionDays: number
     /** Extra flags appended after `claude --resume <id>` (e.g. `--model opus`). */
     extraArgs: string
+    /**
+     * Seconds to wait between sending `cd "<cwd>"\n` and `claude --resume\n`
+     * into the new pty. Empirically Tabby's openTab(profile, cwd) does not
+     * always honor cwd for WSL-backed profiles (the shell ends up in the
+     * profile's default working dir), so we always send an explicit cd and
+     * give it a beat to land before typing the resume command. Without the
+     * gap, claude runs from the wrong cwd and reports
+     * "No conversation found with session ID …" because the on-disk session
+     * cache is per-cwd.
+     */
+    resumeCdDelaySec: number
 }
 
 /**
@@ -213,7 +255,11 @@ export const DEFAULT_SESSION_RESTORE_CONFIG: ClaudeSessionRestoreConfig = {
     enabled: false,
     autoResumeOnLaunch: false,
     retentionDays: 7,
-    extraArgs: '',
+    // Skip the permission prompts when resuming — the user already trusted
+    // Claude in the previous session, and a resume into an interactive prompt
+    // defeats the whole point of auto-resume.
+    extraArgs: '--dangerously-skip-permissions',
+    resumeCdDelaySec: 1.2,
 }
 
 /**

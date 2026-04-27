@@ -47,7 +47,16 @@ export class EdgeTtsBackend implements TtsBackend {
     }
 
     async speak(params: TtsSpeakParams): Promise<void> {
-        const voiceId = params.voiceId || 'en-US-AriaNeural'
+        if (!params.voiceId) {
+            // No silent fallback: if the settings UI didn't hand us a voice id,
+            // fail loudly so speakText() can fall back to Web Speech rather
+            // than always playing the hard-coded Aria voice.
+            throw new Error(
+                'Edge TTS: no voice selected. Pick one in Settings → Audio / TTS → Voice.',
+            )
+        }
+        const voiceId = params.voiceId
+        console.info('[claude-status] Edge TTS speaking with voice:', voiceId)
         const tts = new MsEdgeTTS()
         await tts.setMetadata(voiceId, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3)
 
