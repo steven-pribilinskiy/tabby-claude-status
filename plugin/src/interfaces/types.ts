@@ -23,6 +23,13 @@ export interface ClaudeStatusMetadata {
 export type TtsBackendId = 'webspeech' | 'edge' | 'winrt' | 'piper'
 
 /**
+ * Audio output mode. `tts` speaks `statusTexts`; `sound` plays the file in
+ * `soundsByStatus`. The master `enabled` toggle (above) is the off switch —
+ * we don't need a third "silent" mode.
+ */
+export type AudioMode = 'tts' | 'sound'
+
+/**
  * Audio configuration for TTS and beep notifications
  */
 export interface ClaudeStatusAudioConfig {
@@ -59,6 +66,36 @@ export interface ClaudeStatusAudioConfig {
      * not) — detected via active UDP media sockets owned by Zoom.exe.
      */
     muteDuringZoomMeeting: boolean
+    /**
+     * When true, TTS stays silent while ANY app is actively using the
+     * microphone — covers Zoom, Teams, Discord, Windows Voice Access,
+     * browser voice input, dictation tools, etc. Detected via the Windows
+     * mic-access registry under CapabilityAccessManager.
+     */
+    muteTtsDuringMicActive: boolean
+    /**
+     * Same as above but for sound effects. Independent toggle so users can
+     * keep short status chimes during a call while still suppressing the
+     * more intrusive spoken phrases.
+     */
+    muteSoundDuringMicActive: boolean
+    /**
+     * Output mode. `tts` speaks `statusTexts`; `sound` plays the file paths
+     * in `soundsByStatus`. Both maps are persisted independently so toggling
+     * mode preserves the user's selections in the other mode.
+     */
+    mode: AudioMode
+    /**
+     * Per-status absolute file path of the sound to play when `mode === 'sound'`.
+     * Empty string = skip (matches the existing convention for `statusTexts`).
+     */
+    soundsByStatus: {
+        done: string
+        question: string
+        error: string
+        working: string
+        idle: string
+    }
     statusTexts: {
         done: string
         question: string
@@ -127,6 +164,16 @@ export const DEFAULT_AUDIO_CONFIG: ClaudeStatusAudioConfig = {
     systemBeep: false,
     muteDuringZoomRecording: true,
     muteDuringZoomMeeting: true,
+    muteTtsDuringMicActive: true,
+    muteSoundDuringMicActive: true,
+    mode: 'tts',
+    soundsByStatus: {
+        done: '',
+        question: '',
+        error: '',
+        working: '',
+        idle: '',
+    },
     statusTexts: {
         done: "I'm Done",
         question: 'Question',

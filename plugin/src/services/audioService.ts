@@ -1,6 +1,8 @@
 import { Injectable } from '@angular/core'
 import { ClaudeStatusConfigService } from './configService'
 import { ZoomStateService } from './zoomStateService'
+import { MicStateService } from './micStateService'
+import { SoundService } from './soundService'
 import { ClaudeStatusAudioConfig, ClaudeStatusName, TtsBackendId } from '../interfaces/types'
 import { TtsBackend, TtsSpeakParams } from './tts/tts.interface'
 import { WebSpeechBackend } from './tts/webSpeechBackend'
@@ -18,6 +20,8 @@ export class AudioService {
     constructor(
         private configService: ClaudeStatusConfigService,
         private zoomState: ZoomStateService,
+        private micState: MicStateService,
+        private soundService: SoundService,
     ) {}
 
     getBackend(id: TtsBackendId): TtsBackend {
@@ -40,36 +44,59 @@ export class AudioService {
     }
 
     /**
-     * Speak the phrase associated with `status`, dispatching to the configured
-     * backend. Falls back to Web Speech if the selected backend throws, so a
-     * misconfigured Edge/WinRT/Piper never silences the plugin.
+     * Announce the given status. Dispatches to either the configured TTS
+     * backend (`mode === 'tts'`) or the per-status sound file (`mode === 'sound'`),
+     * gated by the combined Zoom + mic mute checks. Falls back to Web Speech if
+     * the selected TTS backend throws, so a misconfigured backend never silences
+     * the plugin.
      */
     speak(status: ClaudeStatusName): void {
         const config = this.configService.getAudioConfig()
         if (!config.enabled) return
 
-        const text = config.statusTexts[status]
-        if (!text) return
+        const isSoundMode = config.mode === 'sound'
+        const payload = isSoundMode
+            ? config.soundsByStatus[status]
+            : config.statusTexts[status]
+        if (!payload) return
 
-        // Fire-and-forget Zoom gate. The probe is lazy + 10 s cached, so the
-        // first call in a burst may cost a readdir/netstat and the rest are
-        // free. Hook delivery stays non-blocking either way.
-        this.zoomState.shouldMute(config).then(mute => {
-            if (mute) {
-                this.configService.debug(`Suppressing "${text}" — Zoom is active`)
+        // Fire-and-forget gates. Both probes are lazy + 10 s cached, so a
+        // burst of hook events shells out at most once each. Hook delivery
+        // stays non-blocking either way.
+        Promise.all([
+            this.zoomState.shouldMute(config),
+            this.micState.shouldMute(config, config.mode),
+        ]).then(([zoomMute, micMute]) => {
+            if (zoomMute || micMute) {
+                const reason = zoomMute ? 'Zoom is active' : 'microphone is in use'
+                this.configService.debug(`Suppressing "${payload}" — ${reason}`)
                 return
             }
-            this.speakText(text, config)
-            if (config.systemBeep) {
-                this.playBeep(config.volume)
-            }
+            this.dispatchPlayback(isSoundMode, payload, config)
         }, err => {
-            console.warn('[claude-status] Zoom-mute probe failed, speaking anyway:', err)
-            this.speakText(text, config)
-            if (config.systemBeep) {
-                this.playBeep(config.volume)
-            }
+            console.warn('[claude-status] Mute probe failed, playing anyway:', err)
+            this.dispatchPlayback(isSoundMode, payload, config)
         })
+    }
+
+    private dispatchPlayback(isSoundMode: boolean, payload: string, config: ClaudeStatusAudioConfig): void {
+        if (isSoundMode) {
+            this.soundService.play(payload, config.volume)
+        } else {
+            this.speakText(payload, config)
+        }
+        if (config.systemBeep) {
+            this.playBeep(config.volume)
+        }
+    }
+
+    /**
+     * Plays a sound from the settings UI's per-status Test buttons, bypassing
+     * the mic/Zoom mute gates so previewing during dictation still works.
+     */
+    async testPlaySound(filePath: string, volume?: number): Promise<void> {
+        const config = this.configService.getAudioConfig()
+        return this.soundService.play(filePath, volume ?? config.volume)
     }
 
     async speakText(text: string, config?: Partial<ClaudeStatusAudioConfig>): Promise<void> {

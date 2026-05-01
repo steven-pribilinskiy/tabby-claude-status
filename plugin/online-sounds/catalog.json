@@ -1,0 +1,273 @@
+{
+    "version": 2,
+    "updated": "2026-04-30",
+    "_schema": "Each entry under `sounds[]` must have: id (stable, unique — used as the cached filename), label (display name), url (direct HTTPS download — must serve audio/* without auth/cookies), license. Optional: category (working/question/done/error/idle/general — purely informational, helps the user pick), previewUrl (defaults to url), attribution, bytes, durationMs.",
+    "_sources": "All entries below are hosted on Mixkit's CloudFront CDN and verified to serve audio/mpeg with no referrer / cookie requirement. Mixkit's Sound Effects Free License permits free commercial and personal use without attribution; redistributing the binary as a standalone sound library is not allowed, but URL-linking from a third-party plugin (which is what we do — the user's plugin fetches directly from Mixkit) is fine. See https://mixkit.co/license/.",
+    "sounds": [
+        {
+            "id": "mk-correct-answer-tone",
+            "label": "Correct answer tone",
+            "category": "done",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 63471,
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-bell-notification",
+            "label": "Bell notification",
+            "category": "done",
+            "url": "https://assets.mixkit.co/active_storage/sfx/933/933-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 105280,
+            "durationMs": 3000
+        },
+        {
+            "id": "mk-happy-bells-notification",
+            "label": "Happy bells notification",
+            "category": "done",
+            "url": "https://assets.mixkit.co/active_storage/sfx/937/937-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 3000
+        },
+        {
+            "id": "mk-confirmation-tone",
+            "label": "Confirmation tone",
+            "category": "done",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2867/2867-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 43636,
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-success-software-tone",
+            "label": "Success software tone",
+            "category": "done",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2865/2865-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 53759,
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-positive-notification",
+            "label": "Positive notification",
+            "category": "done",
+            "url": "https://assets.mixkit.co/active_storage/sfx/951/951-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 2000
+        },
+        {
+            "id": "mk-correct-answer-reward",
+            "label": "Correct answer reward",
+            "category": "done",
+            "url": "https://assets.mixkit.co/active_storage/sfx/952/952-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 2000
+        },
+        {
+            "id": "mk-game-success-alert",
+            "label": "Game success alert",
+            "category": "done",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2039/2039-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-access-allowed-tone",
+            "label": "Access allowed tone",
+            "category": "done",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-wrong-answer-fail",
+            "label": "Wrong answer fail notification",
+            "category": "error",
+            "url": "https://assets.mixkit.co/active_storage/sfx/946/946-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 63781,
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-sci-fi-error-alert",
+            "label": "Sci-Fi error alert",
+            "category": "error",
+            "url": "https://assets.mixkit.co/active_storage/sfx/898/898-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-sci-fi-reject-notification",
+            "label": "Sci-Fi reject notification",
+            "category": "error",
+            "url": "https://assets.mixkit.co/active_storage/sfx/896/896-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 3000
+        },
+        {
+            "id": "mk-magic-notification-ring",
+            "label": "Magic notification ring",
+            "category": "question",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2344/2344-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 91447,
+            "durationMs": 3000
+        },
+        {
+            "id": "mk-interface-hint-notification",
+            "label": "Interface hint notification",
+            "category": "question",
+            "url": "https://assets.mixkit.co/active_storage/sfx/911/911-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 49848,
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-alert-quick-chime",
+            "label": "Alert quick chime",
+            "category": "question",
+            "url": "https://assets.mixkit.co/active_storage/sfx/766/766-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 41652,
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-magic-marimba",
+            "label": "Magic marimba",
+            "category": "question",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2820/2820-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 106269,
+            "durationMs": 3000
+        },
+        {
+            "id": "mk-message-pop-alert",
+            "label": "Message pop alert",
+            "category": "question",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-bubble-pop-up-alert",
+            "label": "Bubble pop up alert",
+            "category": "question",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2357/2357-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-long-pop",
+            "label": "Long pop",
+            "category": "working",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-interface-option-select",
+            "label": "Interface option select",
+            "category": "working",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2573/2573-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-light-button",
+            "label": "Light button",
+            "category": "working",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2580/2580-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 16077,
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-digital-quick-tone",
+            "label": "Digital quick tone",
+            "category": "working",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2866/2866-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 43375,
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-flute-mobile-phone-alert",
+            "label": "Flute mobile phone notification",
+            "category": "idle",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2316/2316-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 93114,
+            "durationMs": 2000
+        },
+        {
+            "id": "mk-uplifting-flute-notification",
+            "label": "Uplifting flute notification",
+            "category": "idle",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2317/2317-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "bytes": 124440,
+            "durationMs": 3000
+        },
+        {
+            "id": "mk-clear-announce-tones",
+            "label": "Clear announce tones",
+            "category": "general",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2861/2861-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 3000
+        },
+        {
+            "id": "mk-doorbell-tone",
+            "label": "Doorbell tone",
+            "category": "general",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2864/2864-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 4000
+        },
+        {
+            "id": "mk-double-beep-tone-alert",
+            "label": "Double beep tone alert",
+            "category": "general",
+            "url": "https://assets.mixkit.co/active_storage/sfx/2868/2868-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 1000
+        },
+        {
+            "id": "mk-sci-fi-confirmation",
+            "label": "Sci Fi confirmation",
+            "category": "general",
+            "url": "https://assets.mixkit.co/active_storage/sfx/914/914-preview.mp3",
+            "license": "Mixkit Free License",
+            "attribution": "Mixkit",
+            "durationMs": 1000
+        }
+    ]
+}

@@ -1,0 +1,5 @@
+{
+    "version": 1,
+    "_comment": "Bundled high-quality sound effects shipped with the plugin. To add a sound: drop the file (mp3/wav/ogg) next to this manifest and add an entry below. Each entry needs a stable id, the relative file name, a label shown in the UI, and ideally provenance (source_url + license). Files referenced by entries that don't exist on disk are silently skipped.",
+    "sounds": []
+}

@@ -28,6 +28,7 @@
     "dist/",
     "hook.js",
     "assets/",
+    "online-sounds/",
     "README.md"
   ],
   "scripts": {

@@ -82,6 +82,10 @@ export class ClaudeStatusConfigService {
                 ...DEFAULT_AUDIO_CONFIG.statusTexts,
                 ...(stored.statusTexts || {}),
             },
+            soundsByStatus: {
+                ...DEFAULT_AUDIO_CONFIG.soundsByStatus,
+                ...(stored.soundsByStatus || {}),
+            },
             voicesByBackend: {
                 ...(DEFAULT_AUDIO_CONFIG.voicesByBackend || {}),
                 ...(stored.voicesByBackend || {}),

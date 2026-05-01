@@ -2,6 +2,7 @@ import { Component, OnDestroy, OnInit } from '@angular/core'
 import { ConfigService } from 'tabby-core'
 import { AudioService } from '../services/audioService'
 import {
+    AudioMode,
     ClaudeSessionRecord,
     DEFAULT_AUDIO_CONFIG,
     DEFAULT_CONFIG,
@@ -13,6 +14,7 @@ import {
 import { TtsBackend, TtsVoice } from '../services/tts/tts.interface'
 import { SessionRestoreService } from '../services/sessionRestoreService'
 import { PiperInstallerService } from '../services/piperInstallerService'
+import { OnlineSoundEntry, SoundEntry, SoundService } from '../services/soundService'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PLUGIN_PACKAGE = require('../../package.json') as { version: string; homepage?: string }
 
@@ -356,7 +358,7 @@ interface BackendOption {
             <div *ngIf="activeTab === 'audio'">
 
             <!-- Audio / TTS -->
-            <h5>Audio / TTS</h5>
+            <h5>Audio</h5>
 
             <div class="toggle-row">
                 <toggle
@@ -370,6 +372,32 @@ interface BackendOption {
             </div>
 
             <div *ngIf="config.store.claudeStatus.audio.enabled">
+                <div class="form-group mb-3">
+                    <label class="form-label">Output mode</label>
+                    <div class="d-flex gap-3">
+                        <label class="form-check" style="cursor: pointer">
+                            <input class="form-check-input" type="radio"
+                                name="audio-mode" value="tts"
+                                [checked]="config.store.claudeStatus.audio.mode === 'tts'"
+                                (change)="onModeChange('tts')" />
+                            <span class="form-check-label ms-1">Text-to-speech</span>
+                        </label>
+                        <label class="form-check" style="cursor: pointer">
+                            <input class="form-check-input" type="radio"
+                                name="audio-mode" value="sound"
+                                [checked]="config.store.claudeStatus.audio.mode === 'sound'"
+                                (change)="onModeChange('sound')" />
+                            <span class="form-check-label ms-1">Sound effects</span>
+                        </label>
+                    </div>
+                    <div class="form-text">
+                        Switching modes preserves both your TTS phrases and your sound mappings —
+                        nothing is lost when you flip back.
+                    </div>
+                </div>
+
+                <!-- ===== TTS MODE ===== -->
+                <div *ngIf="config.store.claudeStatus.audio.mode === 'tts'">
                 <div class="form-group mb-3">
                     <label class="form-label">TTS backend</label>
                     <select
@@ -528,6 +556,102 @@ interface BackendOption {
                     </label>
                 </div>
 
+                <!-- Status Phrases (TTS mode only) -->
+                <h6>Status Phrases</h6>
+                <p class="text-muted small">Leave blank to skip TTS for that status.</p>
+                <div class="row mb-3" *ngFor="let status of phraseStatuses">
+                    <div class="col-2">
+                        <label class="form-label text-capitalize">{{status}}</label>
+                    </div>
+                    <div class="col-6">
+                        <input
+                            type="text"
+                            class="form-control"
+                            [(ngModel)]="config.store.claudeStatus.audio.statusTexts[status]"
+                            (ngModelChange)="save()"
+                        />
+                    </div>
+                    <div class="col-2">
+                        <button class="btn btn-sm btn-outline-info" (click)="testSpeak(status)">Test</button>
+                    </div>
+                </div>
+                </div><!-- /TTS mode -->
+
+                <!-- ===== SOUND MODE ===== -->
+                <div *ngIf="config.store.claudeStatus.audio.mode === 'sound'">
+                    <div class="row mb-3">
+                        <div class="col-4">
+                            <label class="form-label">Volume ({{config.store.claudeStatus.audio.volume | number:'1.1-1'}})</label>
+                            <input type="range" class="form-range" min="0" max="1" step="0.1"
+                                [(ngModel)]="config.store.claudeStatus.audio.volume" (ngModelChange)="save()" />
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-2 align-items-center mb-3 flex-wrap">
+                        <button class="btn btn-sm btn-outline-primary"
+                                (click)="openOnlineCatalog()">
+                            <i class="fas fa-cloud-download-alt me-1"></i>
+                            Browse online catalog…
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary"
+                                (click)="refreshSoundLibrary()"
+                                [disabled]="soundsLoading">
+                            <i class="fas fa-sync me-1"></i>
+                            {{soundsLoading ? 'Refreshing…' : 'Refresh library'}}
+                        </button>
+                        <button class="btn btn-sm btn-link"
+                                (click)="openSoundCacheDir()"
+                                [title]="soundCacheDir">
+                            <i class="fas fa-folder me-1"></i>
+                            Open downloaded-sounds folder
+                        </button>
+                    </div>
+
+                    <div *ngIf="soundsLoading" class="form-text text-muted">Loading sound library…</div>
+                    <div *ngIf="!soundsLoading && soundGroups.length === 0" class="claude-alert claude-alert-warning mb-3">
+                        No sound files found yet. Use "Browse online catalog…" to download some,
+                        or pick a custom file from the dropdowns below.
+                    </div>
+
+                    <h6>Status Sounds</h6>
+                    <p class="text-muted small">Leave blank to skip the sound for that status.</p>
+                    <div class="row mb-2 align-items-center" *ngFor="let status of phraseStatuses">
+                        <div class="col-2">
+                            <label class="form-label text-capitalize mb-0">{{status}}</label>
+                        </div>
+                        <div class="col-7">
+                            <select class="form-control"
+                                    [ngModel]="getSelectedSoundId(status)"
+                                    (ngModelChange)="onSoundChange(status, $event)">
+                                <option value="">(none)</option>
+                                <optgroup *ngFor="let g of soundGroups" [label]="g.groupLabel">
+                                    <option *ngFor="let s of g.sounds" [value]="s.id">{{s.label}}</option>
+                                </optgroup>
+                                <optgroup label="Custom">
+                                    <option value="__custom__">Pick a file…</option>
+                                </optgroup>
+                            </select>
+                            <div *ngIf="getSelectedSoundId(status) && !getSelectedSoundLabel(status)"
+                                 class="form-text text-warning">
+                                {{getSelectedSoundId(status)}}
+                            </div>
+                        </div>
+                        <div class="col-3 d-flex gap-1">
+                            <button class="btn btn-sm btn-outline-info"
+                                    [disabled]="!getSelectedSoundId(status)"
+                                    (click)="testSound(status)">Test</button>
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    [disabled]="!getSelectedSoundId(status)"
+                                    (click)="clearStatusSound(status)"
+                                    title="Clear">✕</button>
+                        </div>
+                    </div>
+                </div><!-- /sound mode -->
+
+                <!-- ===== SHARED MUTE CONDITIONS ===== -->
+                <h6 class="mt-4">Mute conditions</h6>
+                <p class="text-muted small">Suppress audio in contexts where it would interrupt voice work.</p>
+
                 <div class="form-group mb-3">
                     <div class="toggle-row mb-1">
                         <toggle
@@ -556,30 +680,112 @@ interface BackendOption {
                         </label>
                     </div>
                     <div class="form-text ms-4">
-                        Detected via active UDP media sockets owned by Zoom.exe.
+                        Detected via the Zoom.exe window title.
                     </div>
                 </div>
 
-                <!-- Status Phrases -->
-                <h6>Status Phrases</h6>
-                <p class="text-muted small">Leave blank to skip TTS for that status.</p>
-                <div class="row mb-3" *ngFor="let status of phraseStatuses">
-                    <div class="col-2">
-                        <label class="form-label text-capitalize">{{status}}</label>
-                    </div>
-                    <div class="col-6">
-                        <input
-                            type="text"
-                            class="form-control"
-                            [(ngModel)]="config.store.claudeStatus.audio.statusTexts[status]"
+                <div class="form-group mb-3">
+                    <div class="toggle-row mb-1">
+                        <toggle
+                            [(ngModel)]="config.store.claudeStatus.audio.muteTtsDuringMicActive"
                             (ngModelChange)="save()"
-                        />
+                        ></toggle>
+                        <label class="toggle-label"
+                               (click)="toggleField(config.store.claudeStatus.audio, 'muteTtsDuringMicActive')">
+                            Mute TTS while microphone is in use (any app)
+                        </label>
                     </div>
-                    <div class="col-2">
-                        <button class="btn btn-sm btn-outline-info" (click)="testSpeak(status)">Test</button>
+                </div>
+
+                <div class="form-group mb-3">
+                    <div class="toggle-row mb-1">
+                        <toggle
+                            [(ngModel)]="config.store.claudeStatus.audio.muteSoundDuringMicActive"
+                            (ngModelChange)="save()"
+                        ></toggle>
+                        <label class="toggle-label"
+                               (click)="toggleField(config.store.claudeStatus.audio, 'muteSoundDuringMicActive')">
+                            Mute sound effects while microphone is in use (any app)
+                        </label>
+                    </div>
+                    <div class="form-text ms-4">
+                        Mic detection covers Zoom, Teams, Discord, Windows Voice Access,
+                        browser voice input, dictation tools, etc. — read from the same
+                        registry that powers Settings → Privacy → Microphone.
+                    </div>
+                </div>
+            </div><!-- /audio.enabled -->
+
+            <!-- ===== ONLINE CATALOG MODAL ===== -->
+            <div *ngIf="showOnlineCatalog"
+                 style="position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9000;
+                        display: flex; align-items: center; justify-content: center; padding: 2rem;"
+                 (click)="closeOnlineCatalog()">
+                <div style="background: var(--bs-body-bg, #1b1b1b); color: var(--bs-body-color, #ddd);
+                            border-radius: 8px; max-width: 800px; width: 100%; max-height: 80vh;
+                            overflow: hidden; display: flex; flex-direction: column;
+                            box-shadow: 0 10px 40px rgba(0,0,0,0.6);"
+                     (click)="$event.stopPropagation()">
+                    <div class="d-flex align-items-center justify-content-between p-3 border-bottom">
+                        <h5 class="m-0">Online sound catalog</h5>
+                        <button class="btn btn-sm btn-link" (click)="closeOnlineCatalog()">✕</button>
+                    </div>
+                    <div class="p-3" style="overflow-y: auto; flex: 1;">
+                        <div *ngIf="onlineCatalogLoading" class="text-muted">Loading catalog…</div>
+                        <div *ngIf="onlineCatalogError" class="claude-alert claude-alert-warning mb-3">
+                            {{onlineCatalogError}}
+                        </div>
+                        <div *ngIf="downloadAllResult" class="claude-alert claude-alert-success mb-3">
+                            {{downloadAllResult}}
+                        </div>
+
+                        <div *ngIf="!onlineCatalogLoading && onlineCatalog.length > 0" class="mb-3">
+                            <button class="btn btn-sm btn-primary"
+                                    [disabled]="downloadingId === '__all__'"
+                                    (click)="downloadAllCatalog()">
+                                {{downloadingId === '__all__' ? 'Downloading all…' : 'Download all to library'}}
+                            </button>
+                        </div>
+
+                        <table *ngIf="!onlineCatalogLoading && onlineCatalog.length > 0"
+                               class="table table-sm" style="width: 100%;">
+                            <thead>
+                                <tr>
+                                    <th>Sound</th>
+                                    <th>Category</th>
+                                    <th>License</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr *ngFor="let entry of onlineCatalog">
+                                    <td>
+                                        <div>{{entry.label}}</div>
+                                        <div *ngIf="entry.attribution" class="small text-muted">
+                                            {{entry.attribution}}
+                                        </div>
+                                    </td>
+                                    <td>{{entry.category || '—'}}</td>
+                                    <td class="small">{{entry.license}}</td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-link"
+                                                (click)="previewCatalogEntry(entry)"
+                                                title="Preview">▶</button>
+                                        <button class="btn btn-sm btn-outline-primary"
+                                                [disabled]="downloadingId === entry.id || isDownloaded(entry)"
+                                                (click)="downloadCatalogEntry(entry)">
+                                            <span *ngIf="downloadingId === entry.id">…</span>
+                                            <span *ngIf="downloadingId !== entry.id && isDownloaded(entry)">In library</span>
+                                            <span *ngIf="downloadingId !== entry.id && !isDownloaded(entry)">Download</span>
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
+
             </div><!-- /audio tab -->
 
             <!-- ============== SESSIONS TAB ============== -->
@@ -1088,6 +1294,20 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     voiceLanguageFilter = 'en'
     voiceTextFilter = ''
     filteredVoiceCount = 0
+
+    // Sound-mode state. The grouped list is recomputed each time the user
+    // opens the audio tab, after a download from the catalog completes, and
+    // when "Refresh" is pressed; it isn't tied to change-detection so we
+    // populate it eagerly from ngOnInit.
+    soundsLoading = false
+    soundGroups: { groupLabel: string; sounds: SoundEntry[] }[] = []
+    onlineCatalog: OnlineSoundEntry[] = []
+    onlineCatalogLoading = false
+    onlineCatalogError = ''
+    showOnlineCatalog = false
+    downloadingId = ''
+    downloadAllResult = ''
+    soundCacheDir = ''
     private languageDisplayNames: Intl.DisplayNames | null = (() => {
         try { return new Intl.DisplayNames(['en'], { type: 'language' }) } catch { return null }
     })()
@@ -1218,6 +1438,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         private audioService: AudioService,
         private sessionRestore: SessionRestoreService,
         public piperInstaller: PiperInstallerService,
+        private soundService: SoundService,
     ) {}
 
     ngOnInit(): void {
@@ -1234,11 +1455,25 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         if (!this.config.store.claudeStatus.audio.statusTexts) {
             this.config.store.claudeStatus.audio.statusTexts = { ...DEFAULT_AUDIO_CONFIG.statusTexts }
         }
+        if (!this.config.store.claudeStatus.audio.soundsByStatus) {
+            this.config.store.claudeStatus.audio.soundsByStatus = { ...DEFAULT_AUDIO_CONFIG.soundsByStatus }
+        }
         if (!this.config.store.claudeStatus.audio.voicesByBackend) {
             this.config.store.claudeStatus.audio.voicesByBackend = {}
         }
         if (!this.config.store.claudeStatus.audio.backend) {
             this.config.store.claudeStatus.audio.backend = DEFAULT_AUDIO_CONFIG.backend
+        }
+        if (!this.config.store.claudeStatus.audio.mode) {
+            this.config.store.claudeStatus.audio.mode = DEFAULT_AUDIO_CONFIG.mode
+        }
+        if (this.config.store.claudeStatus.audio.muteTtsDuringMicActive == null) {
+            this.config.store.claudeStatus.audio.muteTtsDuringMicActive =
+                DEFAULT_AUDIO_CONFIG.muteTtsDuringMicActive
+        }
+        if (this.config.store.claudeStatus.audio.muteSoundDuringMicActive == null) {
+            this.config.store.claudeStatus.audio.muteSoundDuringMicActive =
+                DEFAULT_AUDIO_CONFIG.muteSoundDuringMicActive
         }
         if (!this.config.store.claudeStatus.display) {
             this.config.store.claudeStatus.display = { ...DEFAULT_DISPLAY_CONFIG }
@@ -1290,6 +1525,13 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         this.refreshTicker = setInterval(() => {
             this.refreshSessions()
         }, 5000)
+
+        // Pre-populate the sound library so the per-status dropdowns are
+        // ready as soon as the user lands on the audio tab in sound mode.
+        // Cheap: bundled is in-memory, cached + Windows are one readdir each.
+        if (this.config.store.claudeStatus.audio?.mode === 'sound') {
+            this.refreshSoundLibrary()
+        }
     }
 
     refreshPiperState(): void {
@@ -1583,6 +1825,195 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         if (text) {
             this.audioService.speakText(text, audio)
         }
+    }
+
+    // ── Sound mode ──────────────────────────────────────────────────
+
+    onModeChange(mode: AudioMode): void {
+        this.config.store.claudeStatus.audio.mode = mode
+        this.save()
+        if (mode === 'sound' && this.soundGroups.length === 0) {
+            this.refreshSoundLibrary()
+        }
+    }
+
+    async refreshSoundLibrary(): Promise<void> {
+        this.soundsLoading = true
+        try {
+            this.soundService.invalidateCacheList()
+            const [bundled, cached, windows] = await Promise.all([
+                Promise.resolve(this.soundService.listBundledSounds()),
+                this.soundService.listCachedDownloads(),
+                this.soundService.listWindowsSounds(),
+            ])
+            const groups: { groupLabel: string; sounds: SoundEntry[] }[] = []
+            if (bundled.length) groups.push({ groupLabel: `Bundled (${bundled.length})`, sounds: bundled })
+            if (cached.length) groups.push({ groupLabel: `Downloaded (${cached.length})`, sounds: cached })
+            if (windows.length) groups.push({ groupLabel: `Windows (${windows.length})`, sounds: windows })
+            this.soundGroups = groups
+            this.soundCacheDir = this.soundService.getCacheDir()
+        } finally {
+            this.soundsLoading = false
+        }
+    }
+
+    onSoundChange(status: string, soundId: string): void {
+        if (soundId === '__custom__') {
+            this.pickCustomSound(status)
+            return
+        }
+        this.config.store.claudeStatus.audio.soundsByStatus[status] = soundId || ''
+        this.save()
+    }
+
+    /** Resolves the value bound in the per-status <select> back to a real path. */
+    getSelectedSoundId(status: string): string {
+        return this.config.store.claudeStatus.audio.soundsByStatus?.[status] || ''
+    }
+
+    /** Label rendered next to the per-status row when a sound is selected. */
+    getSelectedSoundLabel(status: string): string {
+        const id = this.getSelectedSoundId(status)
+        if (!id) return ''
+        for (const group of this.soundGroups) {
+            const hit = group.sounds.find(s => s.id === id)
+            if (hit) return hit.label
+        }
+        // Custom path that's not in any group — show the file name.
+        return path.basename(id)
+    }
+
+    async pickCustomSound(status: string): Promise<void> {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { dialog, getCurrentWindow } = require('@electron/remote')
+            const win = getCurrentWindow()
+            const result = await dialog.showOpenDialog(win, {
+                title: `Pick sound for ${status}`,
+                properties: ['openFile'],
+                filters: [
+                    { name: 'Audio', extensions: ['wav', 'mp3', 'ogg', 'm4a', 'aac'] },
+                    { name: 'All', extensions: ['*'] },
+                ],
+            })
+            if (result.canceled || !result.filePaths?.[0]) return
+            this.config.store.claudeStatus.audio.soundsByStatus[status] = result.filePaths[0]
+            this.save()
+        } catch (err) {
+            console.warn('[claude-status] Custom sound picker failed:', err)
+        }
+    }
+
+    clearStatusSound(status: string): void {
+        this.config.store.claudeStatus.audio.soundsByStatus[status] = ''
+        this.save()
+    }
+
+    testSound(status: string): void {
+        const audio = this.config.store.claudeStatus.audio
+        const filePath = audio.soundsByStatus?.[status]
+        if (filePath) {
+            this.audioService.testPlaySound(filePath, audio.volume)
+        }
+    }
+
+    // ── Online catalog modal ────────────────────────────────────────
+
+    async openOnlineCatalog(): Promise<void> {
+        this.showOnlineCatalog = true
+        this.onlineCatalogError = ''
+        this.downloadAllResult = ''
+        if (this.onlineCatalog.length) return
+        this.onlineCatalogLoading = true
+        try {
+            this.onlineCatalog = await this.soundService.listOnlineCatalog()
+            if (this.onlineCatalog.length === 0) {
+                this.onlineCatalogError =
+                    'No online sounds curated yet. Add entries to online-sounds/catalog.json (see the _schema field there) and reload Tabby.'
+            }
+        } catch (err) {
+            this.onlineCatalogError = err instanceof Error ? err.message : String(err)
+        } finally {
+            this.onlineCatalogLoading = false
+        }
+    }
+
+    closeOnlineCatalog(): void {
+        this.showOnlineCatalog = false
+    }
+
+    async downloadCatalogEntry(entry: OnlineSoundEntry): Promise<void> {
+        this.downloadingId = entry.id
+        this.onlineCatalogError = ''
+        try {
+            await this.soundService.downloadOnlineSound(entry)
+            await this.refreshSoundLibrary()
+        } catch (err) {
+            this.onlineCatalogError = `Download failed: ${err instanceof Error ? err.message : String(err)}`
+        } finally {
+            this.downloadingId = ''
+        }
+    }
+
+    async downloadAllCatalog(): Promise<void> {
+        this.downloadingId = '__all__'
+        this.onlineCatalogError = ''
+        this.downloadAllResult = ''
+        try {
+            const result = await this.soundService.downloadAllMissing()
+            await this.refreshSoundLibrary()
+            const failedCount = result.failed.length
+            this.downloadAllResult =
+                failedCount === 0
+                    ? `Downloaded ${result.downloaded} new sound${result.downloaded === 1 ? '' : 's'}.`
+                    : `Downloaded ${result.downloaded}, ${failedCount} failed (${result.failed.map(f => f.entry.label).join(', ')}).`
+        } catch (err) {
+            this.onlineCatalogError = err instanceof Error ? err.message : String(err)
+        } finally {
+            this.downloadingId = ''
+        }
+    }
+
+    isDownloaded(entry: OnlineSoundEntry): boolean {
+        // Heuristic: catalog entries are downloaded into a deterministic
+        // filename (id + extension), so we can check for that file in the
+        // cached list.
+        const safeId = entry.id.replace(/[^a-zA-Z0-9._-]/g, '_')
+        for (const group of this.soundGroups) {
+            if (!group.groupLabel.startsWith('Downloaded')) continue
+            if (group.sounds.some(s => path.basename(s.id, path.extname(s.id)) === safeId)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    previewCatalogEntry(entry: OnlineSoundEntry): void {
+        // Preview by streaming the URL directly; if a download already
+        // exists locally, prefer that to avoid re-fetching.
+        const safeId = entry.id.replace(/[^a-zA-Z0-9._-]/g, '_')
+        for (const group of this.soundGroups) {
+            if (!group.groupLabel.startsWith('Downloaded')) continue
+            const hit = group.sounds.find(s => path.basename(s.id, path.extname(s.id)) === safeId)
+            if (hit) {
+                this.audioService.testPlaySound(hit.path)
+                return
+            }
+        }
+        const url = entry.previewUrl || entry.url
+        try {
+            const audio = new Audio(url)
+            audio.volume = this.config.store.claudeStatus.audio.volume
+            audio.play().catch(err => {
+                this.onlineCatalogError = `Preview failed: ${err.message || err}`
+            })
+        } catch (err) {
+            this.onlineCatalogError = err instanceof Error ? err.message : String(err)
+        }
+    }
+
+    openSoundCacheDir(): void {
+        this.soundService.openCacheDir()
     }
 
     // ── Session restore ─────────────────────────────────────────────

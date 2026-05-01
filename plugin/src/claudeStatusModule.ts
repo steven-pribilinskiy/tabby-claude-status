@@ -15,6 +15,8 @@ import { AudioService } from './services/audioService'
 import { PiperInstallerService } from './services/piperInstallerService'
 import { SessionRestoreService } from './services/sessionRestoreService'
 import { ZoomStateService } from './services/zoomStateService'
+import { MicStateService } from './services/micStateService'
+import { SoundService } from './services/soundService'
 import { ClaudeStatusSettingsTabComponent } from './components/claudeStatusSettingsTab.component'
 
 @NgModule({
@@ -25,6 +27,8 @@ import { ClaudeStatusSettingsTabComponent } from './components/claudeStatusSetti
         ClaudeStatusConfigService,
         AudioService,
         ZoomStateService,
+        MicStateService,
+        SoundService,
         PiperInstallerService,
         SessionRestoreService,
         { provide: ConfigProvider, useClass: ClaudeStatusConfigProvider, multi: true },
