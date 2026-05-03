@@ -16,7 +16,7 @@ export class WebSpeechBackend implements TtsBackend {
 
     async listVoices(): Promise<TtsVoice[]> {
         const voices = this.getNativeVoices()
-        if (voices.length > 0) return this.mapVoices(voices)
+        if (voices.length > 0) return this.dedupeOneCore(this.mapVoices(voices))
 
         // Voices sometimes load async; give the engine up to ~500ms to populate.
         await new Promise<void>(resolve => {
@@ -31,7 +31,34 @@ export class WebSpeechBackend implements TtsBackend {
             }
             window.speechSynthesis.addEventListener('voiceschanged', handler, { once: true })
         })
-        return this.mapVoices(this.getNativeVoices())
+        return this.dedupeOneCore(this.mapVoices(this.getNativeVoices()))
+    }
+
+    /**
+     * Drop OneCore-derived voices from the Web Speech list.
+     *
+     * On modern Chromium/Edge, `speechSynthesis.getVoices()` enumerates BOTH
+     * the legacy SAPI 5 voices (David, Zira, Mark, …) AND the modern OneCore /
+     * "Natural" voices (Aria Online, Jenny Online, Hazel Natural, …). The
+     * Windows OneCore (WinRT) backend already exposes the OneCore set. Without
+     * a filter, the dropdown shows every OneCore voice twice — once under
+     * Web Speech, once under OneCore — and the two surfaces don't even share
+     * voice ids, so picking the same voice from each backend behaves
+     * differently.
+     *
+     * Heuristic: a OneCore voice's display name always contains either
+     * "(Natural)" (e.g. "Microsoft Aria Online (Natural) - …") or the bare
+     * "Online" marker. SAPI 5 names use "Desktop" / no marker
+     * ("Microsoft David Desktop - …", "Microsoft Hazel - …"). Filtering by
+     * those substrings keeps Web Speech as the SAPI-only fallback we want.
+     */
+    private dedupeOneCore(voices: TtsVoice[]): TtsVoice[] {
+        return voices.filter(v => {
+            const name = v.id || v.label || ''
+            if (/\(Natural\)/i.test(name)) return false
+            if (/\bOnline\b/i.test(name)) return false
+            return true
+        })
     }
 
     async speak(params: TtsSpeakParams): Promise<void> {

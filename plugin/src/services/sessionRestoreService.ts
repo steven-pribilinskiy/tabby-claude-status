@@ -21,6 +21,10 @@ const SESSIONS_FILE = path.join(
 interface SessionsFile {
     version: 1
     sessions: ClaudeSessionRecord[]
+    /** Run id of the currently-active Tabby instance (rotated on every start). */
+    currentRunId?: string
+    /** Run id of the immediately preceding Tabby instance, captured at startup. */
+    previousRunId?: string | null
 }
 
 /**
@@ -53,12 +57,78 @@ export class SessionRestoreService {
      */
     private liveProfileResolver: (sessionId: string) => { id?: string; name?: string; type?: string } | undefined = () => undefined
 
+    /** Run id rotated every Tabby start. Records observed in the current run carry this id. */
+    private currentRunId: string = SessionRestoreService.makeRunId()
+    /** Run id from the previous Tabby instance — captured on first file read. */
+    private previousRunId: string | null = null
+    private migrated = false
+
     constructor(
         private configService: ClaudeStatusConfigService,
         @Optional() private terminalService: TerminalService | null,
         @Optional() private notifications: NotificationsService | null,
         @Optional() private profilesService: ProfilesService | null,
-    ) {}
+    ) {
+        this.migrateIfNeeded()
+    }
+
+    private static makeRunId(): string {
+        return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+    }
+
+    /**
+     * On the first file touch after this Tabby instance starts:
+     *
+     * - Capture `currentRunId` from the file as our `previousRunId`, then
+     *   stamp a fresh `currentRunId` and persist both.
+     * - Tag any legacy `!closed` records (no `runId`) with a synthetic
+     *   previous-run id so they show up under "Previous run" rather than
+     *   getting dumped straight into History.
+     * - Roll any record whose `runId` predates the previous run into History
+     *   (`closed = true`). The "Previous run" bucket only shows the most
+     *   recent prior run, never older ones.
+     * - Dedupe `sessions` by `sessionId`, keeping the most recent `lastSeen`.
+     *   Guards against any duplicates left over from older versions.
+     */
+    private migrateIfNeeded(): void {
+        if (this.migrated) return
+        this.migrated = true
+
+        const file = this.readFile()
+        const priorRunIdFromFile = file.currentRunId ?? null
+        this.previousRunId = priorRunIdFromFile
+
+        const hasLegacy = file.sessions.some(s => !s.closed && !s.runId)
+        if (hasLegacy && !this.previousRunId) {
+            this.previousRunId = `legacy-${Date.now().toString(36)}`
+            for (const s of file.sessions) {
+                if (!s.closed && !s.runId) s.runId = this.previousRunId
+            }
+        }
+
+        file.previousRunId = this.previousRunId
+        file.currentRunId = this.currentRunId
+
+        const validRunIds = new Set<string>([this.currentRunId])
+        if (this.previousRunId) validRunIds.add(this.previousRunId)
+
+        for (const s of file.sessions) {
+            if (s.closed) continue
+            if (!s.runId || !validRunIds.has(s.runId)) {
+                s.closed = true
+                s.lastSeen = Date.now()
+            }
+        }
+
+        const byId = new Map<string, ClaudeSessionRecord>()
+        for (const s of file.sessions) {
+            const cur = byId.get(s.sessionId)
+            if (!cur || (s.lastSeen ?? 0) > (cur.lastSeen ?? 0)) byId.set(s.sessionId, s)
+        }
+        file.sessions = [...byId.values()]
+
+        this.writeFile(file)
+    }
 
     setLiveTitleResolver(resolver: (sessionId: string) => string | undefined): void {
         this.liveTitleResolver = resolver
@@ -113,6 +183,7 @@ export class SessionRestoreService {
             }
             existing.lastSeen = now
             existing.closed = false
+            existing.runId = this.currentRunId
         } else {
             file.sessions.push({
                 sessionId,
@@ -124,6 +195,7 @@ export class SessionRestoreService {
                 firstSeen: now,
                 lastSeen: now,
                 closed: false,
+                runId: this.currentRunId,
             })
         }
         this.pruneInPlace(file, cfg.retentionDays)
@@ -210,10 +282,18 @@ export class SessionRestoreService {
     }
 
     /**
-     * Open a new Tabby tab at the session's `cwd` and type `claude --resume <id>`.
+     * Open a new Tabby tab at the session's `cwd` and type either
+     * `claude --resume <id>` (mode 'resume', the default) or
+     * `claude --resume <id> --fork-session` (mode 'fork', for active sessions
+     * where resuming in-place would just open a duplicate of an already-running
+     * conversation — the user actually wants a divergent branch).
+     *
      * Returns true if a tab was opened.
      */
-    async resumeSession(session: ClaudeSessionRecord): Promise<boolean> {
+    async resumeSession(
+        session: ClaudeSessionRecord,
+        mode: 'resume' | 'fork' = 'resume',
+    ): Promise<boolean> {
         if (!this.terminalService) {
             this.notifications?.error?.(
                 'Session restore unavailable — the tabby-local plugin is not loaded.',
@@ -223,9 +303,10 @@ export class SessionRestoreService {
 
         const cfg = this.configService.getSessionRestoreConfig()
         const extra = cfg.extraArgs.trim()
+        const forkFlag = mode === 'fork' ? ' --fork-session' : ''
         const resumeCmd = extra
-            ? `claude --resume ${session.sessionId} ${extra}\r`
-            : `claude --resume ${session.sessionId}\r`
+            ? `claude --resume ${session.sessionId}${forkFlag} ${extra}\r`
+            : `claude --resume ${session.sessionId}${forkFlag}\r`
         // Always send an explicit `cd "<cwd>"` first. Tabby's openTab(undefined,
         // cwd) does not reliably set cwd for WSL-backed profiles (the shell
         // ends up in the profile's default dir), and `claude --resume` reads
@@ -322,10 +403,28 @@ export class SessionRestoreService {
     }
 
     /**
-     * Sessions that were open at the time Tabby last ran — i.e. ones that
-     * never received a `SessionEnd` hook and haven't been dismissed by the
-     * user. This is what auto-resume should replay; `list()` returns the
-     * whole history (including closed) for the settings table.
+     * Sessions that have received a hook event during the *current* Tabby
+     * run. Drives the "Active sessions" bucket in the settings UI.
+     */
+    activeSessions(): ClaudeSessionRecord[] {
+        return this.list().filter(s => !s.closed && s.runId === this.currentRunId)
+    }
+
+    /**
+     * Sessions that were active in the immediately-preceding Tabby run but
+     * haven't been forked back into the current one. Drives the "Previous
+     * run" bucket. Older runs are rolled into History by `migrateIfNeeded()`.
+     */
+    previousRunSessions(): ClaudeSessionRecord[] {
+        if (!this.previousRunId) return []
+        const prev = this.previousRunId
+        return this.list().filter(s => !s.closed && s.runId === prev)
+    }
+
+    /**
+     * All non-closed sessions across both Active and Previous run. Used by
+     * `resumeAll()` so auto-resume on launch keeps its pre-three-buckets
+     * behaviour: pick up everything that wasn't explicitly closed.
      */
     openSessions(): ClaudeSessionRecord[] {
         return this.list().filter(s => !s.closed)

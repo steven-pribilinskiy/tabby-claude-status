@@ -15,6 +15,14 @@ export interface ClaudeStatusMetadata {
     action?: string
     source?: string
     reason?: string
+    /**
+     * Path to the JSONL session transcript Claude Code maintains. Forwarded
+     * by hook.js when present. Used by the `dynamic` audio mode to read the
+     * tail of the conversation for context-aware narration.
+     */
+    transcript_path?: string
+    /** Working directory of the Claude Code session. */
+    cwd?: string
 }
 
 /**
@@ -23,11 +31,58 @@ export interface ClaudeStatusMetadata {
 export type TtsBackendId = 'webspeech' | 'edge' | 'winrt' | 'piper'
 
 /**
- * Audio output mode. `tts` speaks `statusTexts`; `sound` plays the file in
- * `soundsByStatus`. The master `enabled` toggle (above) is the off switch —
- * we don't need a third "silent" mode.
+ * Audio output mode.
+ * - `tts` speaks the static `statusTexts` map.
+ * - `sound` plays the file in `soundsByStatus`.
+ * - `dynamic` asks Haiku 4.5 to write a short announcement based on the
+ *   current hook context (last assistant message, tool name, etc.) and
+ *   speaks that via the configured TTS backend. Falls back to `statusTexts`
+ *   on API failure / timeout / disabled-for-status.
+ *
+ * The master `enabled` toggle (above) is the off switch — we don't need a
+ * fourth "silent" mode.
  */
-export type AudioMode = 'tts' | 'sound'
+export type AudioMode = 'tts' | 'sound' | 'dynamic'
+
+/**
+ * Per-status configuration for the `dynamic` audio mode.
+ */
+export interface DynamicPhraseStatusConfig {
+    /** When false, this status falls back to `statusTexts[status]`. */
+    enabled: boolean
+    /**
+     * Full prompt template sent as the user message to Haiku. Supports
+     * placeholder substitution: {status}, {eventName}, {tool}, {message},
+     * {type}, {cwd}, {sessionId}, {lastAssistant}, {lastUserPrompt},
+     * {lastToolName}.
+     */
+    promptTemplate: string
+    /**
+     * When true, skip the LLM call entirely — derive the announcement from
+     * the last assistant message in the transcript via a local "first
+     * sentence, ≤8 words" extractor. Zero token cost.
+     */
+    transcriptOnly: boolean
+}
+
+/**
+ * Configuration for the `dynamic` audio mode.
+ */
+export interface ClaudeStatusDynamicConfig {
+    /** Anthropic API key. Stored in tabby config; user pastes it. */
+    apiKey: string
+    /** Model id. Defaults to `claude-haiku-4-5` — pinned per claude-api skill. */
+    model: string
+    /** Output token cap for the announcement. 32 ≈ 8-12 short words. */
+    maxOutputTokens: number
+    /** Abort the call after this many ms; falls back to static phrase. */
+    timeoutMs: number
+    /** Per-status settings (only `done` and `question` are dynamically narrated). */
+    perStatus: {
+        done: DynamicPhraseStatusConfig
+        question: DynamicPhraseStatusConfig
+    }
+}
 
 /**
  * Audio configuration for TTS and beep notifications
@@ -103,6 +158,11 @@ export interface ClaudeStatusAudioConfig {
         working: string
         idle: string
     }
+    /**
+     * Settings for `mode === 'dynamic'`. Always present so the form binds even
+     * when the user hasn't switched modes yet.
+     */
+    dynamic: ClaudeStatusDynamicConfig
 }
 
 /**
@@ -181,6 +241,36 @@ export const DEFAULT_AUDIO_CONFIG: ClaudeStatusAudioConfig = {
         working: '',
         idle: 'Idle',
     },
+    dynamic: {
+        apiKey: '',
+        model: 'claude-haiku-4-5',
+        maxOutputTokens: 32,
+        timeoutMs: 1500,
+        perStatus: {
+            done: {
+                enabled: true,
+                transcriptOnly: false,
+                promptTemplate:
+                    'Claude just finished a task. Tool last used: {lastToolName}. ' +
+                    "Last assistant message: \"{lastAssistant}\". " +
+                    'Write one short, casual announcement (≤7 words, no punctuation, no quotes) ' +
+                    'that captures what was completed. Examples: "tests passing", "deploy finished", ' +
+                    '"refactor done", "report ready". Output the phrase only.',
+            },
+            question: {
+                enabled: true,
+                transcriptOnly: false,
+                promptTemplate:
+                    'Claude is asking the user a question or requesting permission. ' +
+                    'Notification type: {type}. Tool: {tool}. Message: "{message}". ' +
+                    'Last assistant message: "{lastAssistant}". ' +
+                    'Write one short, casual announcement (≤7 words, no punctuation, no quotes) ' +
+                    'that hints at what is being asked without reading it verbatim. ' +
+                    'Examples: "permission needed", "waiting on you", "confirm to continue". ' +
+                    'Output the phrase only.',
+            },
+        },
+    },
 }
 
 /**
@@ -238,6 +328,14 @@ export interface ClaudeSessionRecord {
      * last ran get resurrected.
      */
     closed?: boolean
+    /**
+     * Tabby run during which this record was last touched by a hook event.
+     * Compared against `SessionsFile.currentRunId` and `previousRunId` to
+     * decide whether the row belongs in Active / Previous run / History.
+     * Optional for backwards compatibility with sessions written before this
+     * field existed (those land in History on the next startup migration).
+     */
+    runId?: string
 }
 
 /**

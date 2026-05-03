@@ -5,6 +5,7 @@ import { StatusParserService } from '../services/statusParserService'
 import { ClaudeStatusConfigService } from '../services/configService'
 import { AudioService } from '../services/audioService'
 import { SessionRestoreService } from '../services/sessionRestoreService'
+import { StatusActivityLogService } from '../services/statusActivityLogService'
 import {
     ClaudeStatusName,
     ClaudeStatusEvent,
@@ -52,6 +53,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         private configService: ClaudeStatusConfigService,
         private audioService: AudioService,
         private sessionRestore: SessionRestoreService,
+        private activityLog: StatusActivityLogService,
         private app: AppService,
     ) {
         super()
@@ -251,7 +253,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             // Find the right terminal for this event
             const terminal = this.findTerminalForEvent(data)
             if (terminal) {
-                this.handleStatusEvent(terminal, event)
+                this.handleStatusEvent(terminal, event, 'hook-file')
             } else {
                 // Claude fired from a non-Tabby terminal (VS Code, Windows
                 // Terminal, plain pwsh…). Don't fan per-tab decorations out
@@ -260,7 +262,21 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 // Still emit the global effects (audio + taskbar) so the
                 // user hears "I'm Done" etc. regardless of host terminal.
                 this.applyTaskbar(event.status, this.configService.getDisplayConfig())
-                this.audioService.speak(event.status)
+                const logId = this.activityLog.record({
+                    status: event.status,
+                    eventName: event.eventName,
+                    source: 'hook-file',
+                    terminalMatched: false,
+                    session: data.session,
+                    metadata: this.summarizeMetadata(data),
+                })
+                // Pass the full payload (not the trimmed summary) as ctx so
+                // the dynamic-phrase pipeline can read transcript_path. The
+                // call is fire-and-forget — speak() returns void.
+                this.audioService.speak(event.status, logId, {
+                    metadata: data,
+                    eventName: event.eventName,
+                })
             }
         } catch (_) {
             // File might be mid-write
@@ -317,15 +333,34 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                     continue
                 }
             }
-            this.handleStatusEvent(terminal, event)
+            this.handleStatusEvent(terminal, event, 'escape-sequence')
         }
     }
 
     // ── Status handling ────────────────────────────────────────────
 
-    private handleStatusEvent(terminal: BaseTerminalTabComponent, event: ClaudeStatusEvent): void {
+    private handleStatusEvent(
+        terminal: BaseTerminalTabComponent,
+        event: ClaudeStatusEvent,
+        source: 'hook-file' | 'escape-sequence',
+    ): void {
         const current = this.currentStatus.get(terminal)
+        const logBase = {
+            status: event.status,
+            eventName: event.eventName,
+            source,
+            terminalMatched: true as const,
+            terminalTitle: (terminal as any).title as string | undefined,
+            session: (event.metadata as any)?.session as string | undefined,
+            metadata: this.summarizeMetadata(event.metadata),
+        }
+
         if (event.status === 'working' && current === 'question') {
+            // Suppressed: don't downgrade an open question to "working" mid-turn.
+            // Still record so the activity log shows why the user did NOT hear
+            // anything for this event.
+            const id = this.activityLog.record(logBase)
+            this.activityLog.setAudioOutcome(id, 'suppressed-duplicate', 'working while still in question')
             return
         }
 
@@ -344,7 +379,32 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             this.scheduleAutoReset(terminal)
         }
 
-        this.audioService.speak(event.status)
+        const logId = this.activityLog.record(logBase)
+        // Fire-and-forget. speak() returns void; the dynamic-phrase pipeline
+        // runs entirely async inside speak(). Decorator never awaits — that
+        // would delay terminal decoration on slow networks.
+        this.audioService.speak(event.status, logId, {
+            metadata: event.metadata,
+            eventName: event.eventName,
+        })
+    }
+
+    /**
+     * Trim the hook payload to fields we actually display in the activity
+     * log. Keeps the on-disk JSON small and avoids leaking arbitrary tool
+     * arguments (some `tool_input` blobs are huge).
+     */
+    private summarizeMetadata(meta: any): Record<string, unknown> | undefined {
+        if (!meta || typeof meta !== 'object') return undefined
+        const keep = ['type', 'tool', 'reason', 'message', 'action', 'source']
+        const out: Record<string, unknown> = {}
+        for (const key of keep) {
+            if (meta[key] !== undefined) out[key] = meta[key]
+        }
+        if (Array.isArray(meta.ancestors) && meta.ancestors.length) {
+            out.ancestors = meta.ancestors.slice(0, 4)
+        }
+        return Object.keys(out).length ? out : undefined
     }
 
     // ── Display surfaces ──────────────────────────────────────────

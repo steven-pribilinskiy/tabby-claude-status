@@ -28,6 +28,24 @@ export interface InstallProgress {
     bytesTotal?: number
 }
 
+/**
+ * One downloadable voice entry distilled from rhasspy/piper-voices/voices.json.
+ * `key` is what the model files are named after (`en_US-lessac-medium`); the
+ * onnx/json URLs already include the cdn host so consumers can pass them
+ * straight to the downloader.
+ */
+export interface PiperVoiceCatalogEntry {
+    key: string
+    name: string
+    language: string
+    languageCode: string
+    languageFamily: string
+    quality: string
+    onnxUrl: string
+    jsonUrl: string
+    sizeBytes: number
+}
+
 const PIPER_PIP_PACKAGE = 'piper-tts'
 const DEFAULT_MODEL_NAME = 'en_US-lessac-medium'
 // Hugging Face hosts the voice models in a public repo originally maintained
@@ -251,6 +269,132 @@ export class PiperInstallerService {
     }
 
     /**
+     * Fetch the official Piper voices catalog from Hugging Face. The repo
+     * publishes `voices.json` at the root of the main branch — a flat object
+     * keyed by voice id ("en_US-lessac-medium") with language metadata,
+     * quality, and a `files` map naming the .onnx + .onnx.json paths.
+     *
+     * Network-blocking; cache the result in the caller.
+     */
+    async fetchVoiceCatalog(): Promise<PiperVoiceCatalogEntry[]> {
+        const url = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json'
+        const json = await this.httpGetText(url)
+        const obj = JSON.parse(json) as Record<string, any>
+        const result: PiperVoiceCatalogEntry[] = []
+        for (const [key, v] of Object.entries(obj)) {
+            const files = v?.files || {}
+            const onnxRel = Object.keys(files).find(p => p.endsWith('.onnx'))
+            const jsonRel = Object.keys(files).find(p => p.endsWith('.onnx.json'))
+            if (!onnxRel || !jsonRel) continue
+            const lang = v.language || {}
+            result.push({
+                key,
+                name: v.name || key,
+                language: lang.name_english || lang.code || 'Unknown',
+                languageCode: lang.code || '',
+                languageFamily: lang.family || (lang.code ? String(lang.code).slice(0, 2) : ''),
+                quality: v.quality || '',
+                onnxUrl: `https://huggingface.co/rhasspy/piper-voices/resolve/main/${onnxRel}`,
+                jsonUrl: `https://huggingface.co/rhasspy/piper-voices/resolve/main/${jsonRel}`,
+                sizeBytes: files[onnxRel]?.size_bytes ?? 0,
+            })
+        }
+        result.sort((a, b) => {
+            if (a.languageFamily === 'en' && b.languageFamily !== 'en') return -1
+            if (b.languageFamily === 'en' && a.languageFamily !== 'en') return 1
+            const al = a.languageCode.localeCompare(b.languageCode)
+            if (al !== 0) return al
+            const aq = qualityRank(a.quality)
+            const bq = qualityRank(b.quality)
+            if (aq !== bq) return aq - bq
+            return a.name.localeCompare(b.name)
+        })
+        return result
+    }
+
+    /**
+     * Download both halves of a voice (`.onnx` + `.onnx.json`) into the
+     * configured Piper models directory. Idempotent — if the files already
+     * exist the download is skipped, so the modal can be opened freely without
+     * re-pulling 60 MB every time.
+     */
+    async downloadVoice(
+        entry: PiperVoiceCatalogEntry,
+        onProgress: (p: InstallProgress) => void,
+    ): Promise<{ modelPath: string; modelJsonPath: string }> {
+        const paths = this.getInstallPaths()
+        const modelsDir = path.dirname(paths.modelPath)
+        await fs.promises.mkdir(modelsDir, { recursive: true })
+
+        const modelPath = path.join(modelsDir, `${entry.key}.onnx`)
+        const modelJsonPath = path.join(modelsDir, `${entry.key}.onnx.json`)
+
+        if (!fs.existsSync(modelPath)) {
+            onProgress({
+                phase: 'download-model',
+                message: `Downloading ${entry.key}.onnx…`,
+            })
+            await this.downloadFile(entry.onnxUrl, modelPath, (received, total) => {
+                onProgress({
+                    phase: 'download-model',
+                    message: `Downloading ${entry.key} (${fmtBytes(received)} / ${fmtBytes(total)})`,
+                    bytesReceived: received,
+                    bytesTotal: total,
+                })
+            })
+        }
+        if (!fs.existsSync(modelJsonPath)) {
+            await this.downloadFile(entry.jsonUrl, modelJsonPath, () => {})
+        }
+
+        onProgress({ phase: 'done', message: `Downloaded ${entry.key}.` })
+        return { modelPath, modelJsonPath }
+    }
+
+    /**
+     * List `.onnx` voice files already on disk in the Piper models dir,
+     * paired with their byte size. The settings UI uses this to mark
+     * already-downloaded voices in the catalog modal and to populate the
+     * voice dropdown without scanning twice.
+     */
+    listInstalledVoices(): { key: string; modelPath: string; sizeBytes: number }[] {
+        const paths = this.getInstallPaths()
+        const modelsDir = path.dirname(paths.modelPath)
+        try {
+            if (!fs.existsSync(modelsDir)) return []
+            return fs
+                .readdirSync(modelsDir)
+                .filter(f => f.endsWith('.onnx'))
+                .map(f => {
+                    const full = path.join(modelsDir, f)
+                    let size = 0
+                    try { size = fs.statSync(full).size } catch { /* ignore */ }
+                    return {
+                        key: path.basename(f, '.onnx'),
+                        modelPath: full,
+                        sizeBytes: size,
+                    }
+                })
+                .sort((a, b) => a.key.localeCompare(b.key))
+        } catch {
+            return []
+        }
+    }
+
+    /** Plain-text GET that follows redirects, used for the catalog JSON. */
+    private httpGetText(url: string): Promise<string> {
+        return new Promise((resolve, reject) => {
+            this.httpGet(url, res => {
+                let buf = ''
+                res.setEncoding('utf-8')
+                res.on('data', c => { buf += c })
+                res.on('end', () => resolve(buf))
+                res.on('error', reject)
+            }).catch(reject)
+        })
+    }
+
+    /**
      * Run a child process and capture its full stdout (used for short-lived
      * commands like `python --version`). Rejects with stderr when the
      * process exits non-zero.
@@ -365,4 +509,15 @@ function fmtBytes(n: number): string {
     if (n < 1024) return `${n} B`
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
     return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** Order qualities low → medium → high → x_low so the catalog UI groups sanely. */
+function qualityRank(q: string): number {
+    switch ((q || '').toLowerCase()) {
+        case 'x_low': return 0
+        case 'low': return 1
+        case 'medium': return 2
+        case 'high': return 3
+        default: return 4
+    }
 }

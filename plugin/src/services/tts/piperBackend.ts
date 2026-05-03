@@ -45,12 +45,41 @@ export class PiperBackend implements TtsBackend {
     }
 
     async listVoices(): Promise<TtsVoice[]> {
-        if (!await this.isAvailable()) return []
-        const base = path.basename(this.modelPath, '.onnx')
-        return [{
-            id: this.modelPath,
-            label: `${base} (${this.modelPath})`,
-        }]
+        // Deliberately not gated on isAvailable() — we still want to surface
+        // any installed sibling .onnx files in the dropdown even when the
+        // currently-configured model path is bogus. Selecting a sibling auto-
+        // updates piperModelPath via the settings component's onVoiceChange.
+        // The configured model is the first entry; sibling .onnx files in the
+        // same directory get listed too so users who downloaded extra voices
+        // (via the catalog modal in the settings UI) can pick them from the
+        // dropdown instead of having to re-type the full path each time.
+        const voices: TtsVoice[] = []
+        const seen = new Set<string>()
+        const push = (full: string) => {
+            if (seen.has(full)) return
+            seen.add(full)
+            const base = path.basename(full, '.onnx')
+            voices.push({ id: full, label: base, locale: this.localeFromKey(base) })
+        }
+        if (this.modelPath && fs.existsSync(this.modelPath)) push(this.modelPath)
+
+        const modelsDir = path.dirname(this.modelPath)
+        try {
+            if (modelsDir && fs.existsSync(modelsDir)) {
+                for (const f of await fs.promises.readdir(modelsDir)) {
+                    if (f.endsWith('.onnx')) push(path.join(modelsDir, f))
+                }
+            }
+        } catch (err) {
+            console.warn('[claude-status] Piper modelsDir scan failed:', err)
+        }
+        return voices
+    }
+
+    /** Map a Piper voice key like `en_US-lessac-medium` to its BCP-47 locale. */
+    private localeFromKey(key: string): string | undefined {
+        const m = /^([a-z]{2,3})_([A-Z]{2})/.exec(key)
+        return m ? `${m[1]}-${m[2]}` : undefined
     }
 
     async speak(params: TtsSpeakParams): Promise<void> {

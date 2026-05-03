@@ -13,8 +13,12 @@ import {
 } from '../interfaces/types'
 import { TtsBackend, TtsVoice } from '../services/tts/tts.interface'
 import { SessionRestoreService } from '../services/sessionRestoreService'
-import { PiperInstallerService } from '../services/piperInstallerService'
+import { PiperInstallerService, PiperVoiceCatalogEntry } from '../services/piperInstallerService'
 import { OnlineSoundEntry, SoundEntry, SoundService } from '../services/soundService'
+import { ActivityLogEntry, StatusActivityLogService } from '../services/statusActivityLogService'
+import { ClaudeApiService } from '../services/claudeApiService'
+import { ClaudeCredentialsService, CredentialsStatus } from '../services/claudeCredentialsService'
+import { TranscriptReaderService } from '../services/transcriptReaderService'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PLUGIN_PACKAGE = require('../../package.json') as { version: string; homepage?: string }
 
@@ -62,6 +66,36 @@ interface BackendOption {
         }
         .copyable-row code {
             word-break: break-all;
+            color: var(--bs-body-color, #ddd);
+            background: transparent;
+            padding: 0;
+        }
+
+        .history-group {
+            border-bottom: 1px solid var(--bs-border-color, rgba(128, 128, 128, 0.25));
+        }
+        .history-group:last-child {
+            border-bottom: none;
+        }
+        .history-group-header {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            background: transparent;
+            border: 0;
+            text-align: left;
+            color: var(--bs-body-color, inherit);
+            cursor: pointer;
+        }
+        .history-group-header:hover {
+            background: rgba(128, 128, 128, 0.08);
+        }
+        .history-group-header code {
+            background: transparent;
+            color: var(--bs-secondary-color, #888);
+            padding: 0;
         }
         .copyable-row .copy-btn {
             opacity: 0;
@@ -126,6 +160,86 @@ interface BackendOption {
             border-color: rgba(13, 110, 253, 0.45);
         }
 
+        /* Hover-triggered help popover. The wrapper is the hover target so
+           the popover stays visible while the cursor moves into it (only the
+           wrapper's :hover state controls visibility). */
+        .help-popover-wrap {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+        .help-popover-wrap .help-trigger {
+            background: transparent;
+            border: 0;
+            padding: 0;
+            margin: 0;
+            line-height: 1;
+            color: var(--bs-secondary-color, #888);
+            cursor: help;
+            font-size: 0.95em;
+        }
+        .help-popover-wrap .help-trigger:hover,
+        .help-popover-wrap .help-trigger:focus {
+            color: var(--bs-info, #0dcaf0);
+            outline: none;
+        }
+        .help-popover {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            z-index: 1000;
+            min-width: 360px;
+            max-width: 480px;
+            padding: 0.75rem 0.875rem;
+            background: var(--bs-body-bg, #1f1f1f);
+            color: var(--bs-body-color, #e6e6e6);
+            border: 1px solid var(--bs-border-color, rgba(128, 128, 128, 0.45));
+            border-radius: 0.375rem;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+            font-size: 0.85em;
+            line-height: 1.45;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-2px);
+            transition: opacity 0.12s ease-out, transform 0.12s ease-out, visibility 0s linear 0.12s;
+            pointer-events: none;
+        }
+        .help-popover-wrap:hover .help-popover,
+        .help-popover-wrap:focus-within .help-popover {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+            pointer-events: auto;
+            transition-delay: 0s;
+        }
+        .help-popover h6 {
+            margin: 0 0 0.5rem 0;
+            font-size: 0.95em;
+            font-weight: 600;
+        }
+        .help-popover p {
+            margin: 0 0 0.5rem 0;
+        }
+        .help-popover p:last-child {
+            margin-bottom: 0;
+        }
+        .help-popover code {
+            background: rgba(128, 128, 128, 0.15);
+            padding: 0.05rem 0.3rem;
+            border-radius: 0.2rem;
+            font-size: 0.92em;
+        }
+        .help-popover ul {
+            margin: 0 0 0.5rem 0;
+            padding-left: 1.1rem;
+        }
+        .help-popover li { margin-bottom: 0.2rem; }
+        .help-popover li:last-child { margin-bottom: 0; }
+        .help-popover.help-popover-right {
+            left: auto;
+            right: 0;
+        }
+
         /* Tabs nav across the top of the settings panel. */
         .settings-tabs {
             border-bottom: 1px solid var(--bs-border-color, rgba(128, 128, 128, 0.25));
@@ -143,7 +257,13 @@ interface BackendOption {
             border-bottom: none;
             border-top-left-radius: 0.375rem;
             border-top-right-radius: 0.375rem;
-            color: var(--bs-secondary-color, #888);
+            /* Use the theme's body color at reduced opacity so inactive tabs
+               stay legible on both Tabby's dark chrome (where
+               --bs-secondary-color renders as near-black on near-black) and
+               the lighter settings surface. currentColor + opacity adapts to
+               whichever theme is in play without needing per-theme overrides. */
+            color: inherit;
+            opacity: 0.55;
             font-weight: 500;
             display: inline-flex;
             align-items: center;
@@ -151,13 +271,15 @@ interface BackendOption {
             margin-bottom: -1px;
         }
         .settings-tabs .nav-link:hover {
-            color: var(--bs-body-color, inherit);
-            background-color: rgba(128, 128, 128, 0.08);
+            color: inherit;
+            opacity: 0.85;
+            background-color: rgba(128, 128, 128, 0.12);
         }
         .settings-tabs .nav-link.active {
-            color: var(--bs-body-color, inherit);
+            color: inherit;
+            opacity: 1;
             background-color: var(--bs-body-bg, transparent);
-            border-color: var(--bs-border-color, rgba(128, 128, 128, 0.25));
+            border-color: var(--bs-border-color, rgba(128, 128, 128, 0.35));
             border-bottom-color: var(--bs-body-bg, transparent);
         }
         .settings-tabs .tab-badge {
@@ -389,15 +511,247 @@ interface BackendOption {
                                 (change)="onModeChange('sound')" />
                             <span class="form-check-label ms-1">Sound effects</span>
                         </label>
+                        <label class="form-check" style="cursor: pointer">
+                            <input class="form-check-input" type="radio"
+                                name="audio-mode" value="dynamic"
+                                [checked]="config.store.claudeStatus.audio.mode === 'dynamic'"
+                                (change)="onModeChange('dynamic')" />
+                            <span class="form-check-label ms-1">Dynamic (Claude-generated)</span>
+                        </label>
                     </div>
                     <div class="form-text">
-                        Switching modes preserves both your TTS phrases and your sound mappings —
-                        nothing is lost when you flip back.
+                        Switching modes preserves your TTS phrases, sound mappings, and dynamic
+                        prompts — nothing is lost when you flip back.
                     </div>
                 </div>
 
-                <!-- ===== TTS MODE ===== -->
-                <div *ngIf="config.store.claudeStatus.audio.mode === 'tts'">
+                <!-- ===== DYNAMIC MODE ===== -->
+                <div *ngIf="config.store.claudeStatus.audio.mode === 'dynamic'">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <h6 class="mb-0">Dynamic phrase generation</h6>
+                        <span class="help-popover-wrap">
+                            <button class="help-trigger" type="button"
+                                    aria-label="How dynamic mode authenticates"
+                                    tabindex="0"
+                                    (click)="$event.preventDefault()">
+                                <i class="fas fa-question-circle"></i>
+                            </button>
+                            <div class="help-popover" role="tooltip">
+                                <h6>How dynamic mode authenticates</h6>
+                                <p>
+                                    The plugin reads your existing Claude Code login from
+                                    <code>~/.claude/.credentials.json</code> and uses the OAuth
+                                    access token Claude Code already manages — no API key setup
+                                    required.
+                                </p>
+                                <p>Each request sends:</p>
+                                <ul>
+                                    <li><code>Authorization: Bearer &lt;oauth-token&gt;</code></li>
+                                    <li><code>anthropic-beta: oauth-2025-04-20</code></li>
+                                    <li><code>anthropic-version: 2023-06-01</code></li>
+                                </ul>
+                                <p>
+                                    Calls bill against your Claude
+                                    <strong>Max</strong>/<strong>Pro</strong> subscription, not a
+                                    paid API key. The required scope is
+                                    <code>user:inference</code>, which Claude Code grants by default.
+                                </p>
+                                <p>
+                                    <strong>Token refresh:</strong> the plugin doesn't refresh the
+                                    OAuth token itself — running <code>claude</code> in any
+                                    terminal triggers Claude Code's own refresh, and the plugin
+                                    re-reads the file (30 s read cache). If you see "Subscription
+                                    token expired", run <code>claude</code> and click the
+                                    <i class="fas fa-sync-alt"></i> refresh icon.
+                                </p>
+                                <p>
+                                    <strong>Fallback:</strong> if the subscription isn't usable
+                                    (not signed in, missing scope, can't read the file), an
+                                    Anthropic API-key field appears below.
+                                </p>
+                            </div>
+                        </span>
+                    </div>
+                    <p class="text-muted small mb-2">
+                        Claude Haiku 4.5 writes a short, context-aware announcement based on the
+                        actual hook event (last assistant message, tool name, etc.) — so you'll
+                        hear "tests passing" instead of "I'm done". Calls run async and are
+                        bounded by a per-status timeout; if the API is slow or fails, the static
+                        phrases below are spoken instead.
+                    </p>
+
+                    <!-- Subscription status (primary auth path) -->
+                    <div *ngIf="credStatus" class="claude-alert mb-2"
+                         [class.claude-alert-success]="credStatus.state === 'ok'"
+                         [class.claude-alert-warning]="credStatus.state === 'expired' || credStatus.state === 'no-inference-scope'"
+                         [class.claude-alert-danger]="credStatus.state === 'missing-file' || credStatus.state === 'no-oauth' || credStatus.state === 'read-error'"
+                         style="max-width: 700px">
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <i class="fas"
+                               [class.fa-check-circle]="credStatus.state === 'ok'"
+                               [class.fa-exclamation-triangle]="credStatus.state !== 'ok'"></i>
+                            <strong *ngIf="credStatus.state === 'ok'">
+                                Using Claude Code subscription
+                                <span *ngIf="credStatus.creds?.subscriptionType"
+                                      class="badge text-bg-secondary text-uppercase ms-1">
+                                    {{credStatus.creds!.subscriptionType}}
+                                </span>
+                            </strong>
+                            <strong *ngIf="credStatus.state === 'expired'">Subscription token expired</strong>
+                            <strong *ngIf="credStatus.state === 'missing-file'">Claude Code not signed in</strong>
+                            <strong *ngIf="credStatus.state === 'no-oauth'">Claude Code credentials incomplete</strong>
+                            <strong *ngIf="credStatus.state === 'no-inference-scope'">Subscription token can't call /v1/messages</strong>
+                            <strong *ngIf="credStatus.state === 'read-error'">Couldn't read credentials.json</strong>
+                            <button class="btn btn-sm btn-outline-secondary ms-auto"
+                                    type="button"
+                                    (click)="refreshCredStatus()"
+                                    title="Re-read ~/.claude/.credentials.json">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
+                        <div *ngIf="credStatus.state === 'ok' && credStatus.creds" class="small text-muted mt-1">
+                            <span *ngIf="credStatus.creds.expiresAt > 0">
+                                Token valid until {{formatExpiry(credStatus.creds.expiresAt)}}.
+                            </span>
+                            <span *ngIf="credStatus.creds.rateLimitTier" class="ms-1">
+                                Rate-limit tier: <code>{{credStatus.creds.rateLimitTier}}</code>.
+                            </span>
+                            Calls bill against your subscription, not an API key.
+                        </div>
+                        <div *ngIf="credStatus.state !== 'ok'" class="small mt-1">
+                            {{credStatus.detail}}
+                            <span *ngIf="credStatus.state === 'expired'" class="d-block mt-1">
+                                Run <code>claude</code> in any terminal — Claude Code refreshes the
+                                token on startup. Then click the refresh icon above.
+                            </span>
+                            <span *ngIf="credStatus.state === 'missing-file'" class="d-block mt-1">
+                                Or paste an API key below as a fallback.
+                            </span>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            <code>{{credStatus.filePath}}</code>
+                        </div>
+                    </div>
+
+                    <!-- API key fallback (only shown when subscription isn't usable) -->
+                    <div *ngIf="!credStatus || credStatus.state !== 'ok'" class="form-group mb-3">
+                        <label class="form-label">Anthropic API key (fallback)</label>
+                        <input type="password" class="form-control" style="max-width: 480px"
+                               [(ngModel)]="config.store.claudeStatus.audio.dynamic.apiKey"
+                               (ngModelChange)="save()"
+                               placeholder="sk-ant-..." autocomplete="off" />
+                        <div class="form-text">
+                            Used only when the Claude Code subscription above isn't available.
+                            Get one at
+                            <a href="#" (click)="openUrl('https://console.anthropic.com/settings/keys', $event)">
+                                console.anthropic.com
+                            </a>.
+                        </div>
+                    </div>
+
+                    <div class="row mb-3" style="max-width: 700px">
+                        <div class="col-4">
+                            <label class="form-label">Model</label>
+                            <input type="text" class="form-control"
+                                   [(ngModel)]="config.store.claudeStatus.audio.dynamic.model"
+                                   (ngModelChange)="save()"
+                                   placeholder="claude-haiku-4-5" />
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label">Max output tokens</label>
+                            <input type="number" class="form-control"
+                                   [(ngModel)]="config.store.claudeStatus.audio.dynamic.maxOutputTokens"
+                                   (ngModelChange)="save()"
+                                   min="8" max="128" step="4" />
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label">Timeout (ms)</label>
+                            <input type="number" class="form-control"
+                                   [(ngModel)]="config.store.claudeStatus.audio.dynamic.timeoutMs"
+                                   (ngModelChange)="save()"
+                                   min="200" max="10000" step="100" />
+                        </div>
+                    </div>
+
+                    <div *ngFor="let s of dynamicStatuses" class="card mb-2"
+                         style="max-width: 900px">
+                        <div class="card-body py-2 px-3">
+                            <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+                                <toggle
+                                    [(ngModel)]="config.store.claudeStatus.audio.dynamic.perStatus[s].enabled"
+                                    (ngModelChange)="save()"
+                                ></toggle>
+                                <label class="toggle-label mb-0 text-capitalize"
+                                       (click)="toggleField(config.store.claudeStatus.audio.dynamic.perStatus[s], 'enabled')">
+                                    <strong>{{s}}</strong> — generate dynamically
+                                </label>
+                                <span class="text-muted small ms-2">
+                                    Falls back to "{{config.store.claudeStatus.audio.statusTexts[s]}}" on miss
+                                </span>
+                                <button class="btn btn-sm btn-outline-secondary ms-auto"
+                                        type="button"
+                                        [disabled]="dynamicTesting === s"
+                                        (click)="testDynamicPhrase(s)">
+                                    <span *ngIf="dynamicTesting !== s">
+                                        <i class="fas fa-flask me-1"></i>Test
+                                    </span>
+                                    <span *ngIf="dynamicTesting === s">Generating…</span>
+                                </button>
+                            </div>
+
+                            <div *ngIf="config.store.claudeStatus.audio.dynamic.perStatus[s].enabled">
+                                <div class="toggle-row mb-2 ms-4">
+                                    <toggle
+                                        [(ngModel)]="config.store.claudeStatus.audio.dynamic.perStatus[s].transcriptOnly"
+                                        (ngModelChange)="save()"
+                                    ></toggle>
+                                    <label class="toggle-label small"
+                                           (click)="toggleField(config.store.claudeStatus.audio.dynamic.perStatus[s], 'transcriptOnly')">
+                                        Transcript-only (no API call, zero token cost)
+                                    </label>
+                                </div>
+
+                                <div *ngIf="!config.store.claudeStatus.audio.dynamic.perStatus[s].transcriptOnly">
+                                    <label class="form-label small mb-1">Prompt template</label>
+                                    <textarea class="form-control form-control-sm font-monospace"
+                                              rows="4"
+                                              [(ngModel)]="config.store.claudeStatus.audio.dynamic.perStatus[s].promptTemplate"
+                                              (ngModelChange)="save()"></textarea>
+                                    <div class="form-text small">
+                                        Placeholders:
+                                        <code>{{ '{status}' }}</code>
+                                        <code>{{ '{eventName}' }}</code>
+                                        <code>{{ '{tool}' }}</code>
+                                        <code>{{ '{message}' }}</code>
+                                        <code>{{ '{type}' }}</code>
+                                        <code>{{ '{lastAssistant}' }}</code>
+                                        <code>{{ '{lastUserPrompt}' }}</code>
+                                        <code>{{ '{lastToolName}' }}</code>
+                                        <code>{{ '{cwd}' }}</code>
+                                        <code>{{ '{sessionId}' }}</code>
+                                    </div>
+                                </div>
+
+                                <div *ngIf="dynamicTestResult && dynamicTestResult.status === s"
+                                     class="claude-alert mt-2 small"
+                                     [class.claude-alert-success]="dynamicTestResult.kind === 'ok'"
+                                     [class.claude-alert-danger]="dynamicTestResult.kind === 'error'">
+                                    <strong>{{dynamicTestResult.kind === 'ok' ? 'Generated:' : 'Error:'}}</strong>
+                                    {{dynamicTestResult.message}}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p class="text-muted small mt-2">
+                        Static fallback phrases live below — same UI as the TTS mode. They are
+                        spoken when dynamic generation fails, times out, or is disabled for the
+                        status.
+                    </p>
+                </div>
+
+                <!-- ===== TTS / DYNAMIC MODE (shares the TTS backend + statusTexts) ===== -->
+                <div *ngIf="config.store.claudeStatus.audio.mode === 'tts' || config.store.claudeStatus.audio.mode === 'dynamic'">
                 <div class="form-group mb-3">
                     <label class="form-label">TTS backend</label>
                     <select
@@ -465,15 +819,22 @@ interface BackendOption {
                 </div>
 
                 <div *ngIf="currentBackend?.id === 'piper'" class="mb-3">
-                    <div class="d-flex align-items-center gap-2 mb-2">
-                        <span class="small text-muted">Piper home:</span>
+                    <div class="small mb-1">
+                        <span class="text-muted me-2">Piper home:</span>
                         <a href="#" (click)="openUrl(piperInstaller.homepageUrl, $event)">
                             {{piperInstaller.homepageUrl}}
                         </a>
-                        <span class="small text-muted ms-3">Voices:</span>
+                    </div>
+                    <div class="small mb-2">
+                        <span class="text-muted me-2">Voices:</span>
                         <a href="#" (click)="openUrl(piperInstaller.voicesUrl, $event)">
                             huggingface.co/rhasspy/piper-voices
                         </a>
+                        <span class="text-muted ms-2">
+                            — download both <code>.onnx</code> and <code>.onnx.json</code> for a voice
+                            and save them next to the configured Piper model below; restart Tabby
+                            to pick up the new voice.
+                        </span>
                     </div>
 
                     <div *ngIf="piperInstalled" class="claude-alert claude-alert-success mb-2">
@@ -496,13 +857,20 @@ interface BackendOption {
                         Install failed: {{piperInstallError}}
                     </div>
 
-                    <div class="d-flex align-items-center gap-2 mb-3">
+                    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
                         <button class="btn btn-sm btn-primary"
                                 [disabled]="piperInstalling"
                                 (click)="installPiper()">
                             <span *ngIf="!piperInstalling && !piperInstalled">Install Piper + default voice</span>
                             <span *ngIf="!piperInstalling && piperInstalled">Reinstall</span>
                             <span *ngIf="piperInstalling">Installing…</span>
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary"
+                                [disabled]="piperInstalling || !piperInstalled"
+                                (click)="openPiperVoiceCatalog()"
+                                title="Browse the official rhasspy/piper-voices catalog and install voices into the Piper models folder.">
+                            <i class="fas fa-cloud-download-alt me-1"></i>
+                            Browse voices…
                         </button>
                         <span *ngIf="piperDetectedInstallers.length" class="text-muted small">
                             Also detected: {{piperDetectedInstallers.join(', ')}} (Piper isn't in these repositories)
@@ -786,6 +1154,99 @@ interface BackendOption {
                 </div>
             </div>
 
+            <!-- Piper voice catalog modal -->
+            <div *ngIf="showPiperVoiceCatalog"
+                 style="position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9000;
+                        display: flex; align-items: center; justify-content: center; padding: 2rem;"
+                 (click)="closePiperVoiceCatalog()">
+                <div style="background: var(--bs-body-bg, #1b1b1b); color: var(--bs-body-color, #ddd);
+                            border-radius: 8px; max-width: 900px; width: 100%; max-height: 80vh;
+                            overflow: hidden; display: flex; flex-direction: column;
+                            box-shadow: 0 10px 40px rgba(0,0,0,0.6);"
+                     (click)="$event.stopPropagation()">
+                    <div class="d-flex align-items-center justify-content-between p-3 border-bottom">
+                        <h5 class="m-0">Piper voice catalog</h5>
+                        <button class="btn btn-sm btn-link" (click)="closePiperVoiceCatalog()">✕</button>
+                    </div>
+                    <div class="px-3 pt-3">
+                        <div class="d-flex gap-2 flex-wrap mb-2">
+                            <select class="form-control form-control-sm"
+                                    style="max-width: 240px"
+                                    [(ngModel)]="piperCatalogLanguageFilter">
+                                <option value="">All languages ({{piperCatalogTotalCount}})</option>
+                                <option *ngFor="let lang of piperCatalogLanguageOptions" [value]="lang.code">
+                                    {{lang.name}} ({{lang.count}})
+                                </option>
+                            </select>
+                            <input type="text"
+                                   class="form-control form-control-sm"
+                                   style="flex: 1; min-width: 180px"
+                                   placeholder="Filter by name…"
+                                   [(ngModel)]="piperCatalogTextFilter" />
+                            <button *ngIf="piperCatalogLanguageFilter || piperCatalogTextFilter"
+                                    class="btn btn-sm btn-outline-secondary"
+                                    type="button"
+                                    title="Clear filters"
+                                    (click)="clearPiperCatalogFilters()">
+                                ✕
+                            </button>
+                        </div>
+                        <div class="small text-muted mb-2">
+                            Voices download into <code>{{piperModelsDir}}</code>. Tabby picks them up automatically — no restart required.
+                        </div>
+                    </div>
+                    <div class="p-3 pt-0" style="overflow-y: auto; flex: 1;">
+                        <div *ngIf="piperCatalogLoading" class="text-muted">Loading voice catalog from Hugging Face…</div>
+                        <div *ngIf="piperCatalogError" class="claude-alert claude-alert-warning mb-3">
+                            {{piperCatalogError}}
+                        </div>
+
+                        <table *ngIf="!piperCatalogLoading && filteredPiperCatalog.length > 0"
+                               class="table table-sm" style="width: 100%;">
+                            <thead>
+                                <tr>
+                                    <th>Voice</th>
+                                    <th>Language</th>
+                                    <th>Quality</th>
+                                    <th class="text-end">Size</th>
+                                    <th class="text-end">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr *ngFor="let entry of filteredPiperCatalog">
+                                    <td>
+                                        <div><strong>{{entry.name}}</strong></div>
+                                        <div class="small text-muted"><code>{{entry.key}}</code></div>
+                                    </td>
+                                    <td>{{entry.language}}</td>
+                                    <td>{{entry.quality || '—'}}</td>
+                                    <td class="text-end small">{{formatBytes(entry.sizeBytes)}}</td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-outline-primary"
+                                                [disabled]="piperDownloadingKey === entry.key || isPiperVoiceDownloaded(entry.key)"
+                                                (click)="downloadPiperVoice(entry)">
+                                            <span *ngIf="piperDownloadingKey === entry.key">{{piperDownloadStatus || '…'}}</span>
+                                            <span *ngIf="piperDownloadingKey !== entry.key && isPiperVoiceDownloaded(entry.key)">Installed</span>
+                                            <span *ngIf="piperDownloadingKey !== entry.key && !isPiperVoiceDownloaded(entry.key)">Download</span>
+                                        </button>
+                                        <button *ngIf="isPiperVoiceDownloaded(entry.key)"
+                                                class="btn btn-sm btn-outline-success ms-1"
+                                                (click)="usePiperVoice(entry.key)"
+                                                title="Set as the active Piper voice.">
+                                            Use
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div *ngIf="!piperCatalogLoading && filteredPiperCatalog.length === 0 && piperCatalog.length > 0"
+                             class="text-muted small">
+                            No voices match the current filter.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             </div><!-- /audio tab -->
 
             <!-- ============== SESSIONS TAB ============== -->
@@ -858,9 +1319,10 @@ interface BackendOption {
 
                 <div class="d-flex align-items-center gap-2 mb-2 ms-3 flex-wrap">
                     <button class="btn btn-sm btn-outline-primary"
-                            [disabled]="openSessions.length === 0"
-                            (click)="resumeAllSessions()">
-                        Resume all now
+                            [disabled]="previousRunSessions.length === 0"
+                            (click)="resumeAllPreviousRun()"
+                            title="Open a new tab for every previous-run session and run claude --resume on each.">
+                        Resume previous run
                     </button>
                     <button class="btn btn-sm btn-outline-secondary" (click)="refreshSessions()">
                         Refresh list
@@ -871,7 +1333,9 @@ interface BackendOption {
                         Move all to history
                     </button>
                     <span class="text-muted small">
-                        {{openSessions.length}} open · {{closedSessions.length}} in history
+                        {{activeSessions.length}} active ·
+                        {{previousRunSessions.length}} previous run ·
+                        {{closedSessions.length}} in history
                     </span>
                 </div>
 
@@ -892,13 +1356,14 @@ interface BackendOption {
                         </button>
                     </div>
                     <div *ngIf="sessionFilter" class="form-text small">
-                        {{filteredOpenSessions.length}} of {{openSessions.length}} open ·
+                        {{filteredActiveSessions.length}} of {{activeSessions.length}} active ·
+                        {{filteredPreviousRunSessions.length}} of {{previousRunSessions.length}} previous run ·
                         {{filteredClosedSessions.length}} of {{closedSessions.length}} in history match
                     </div>
                 </div>
 
-                <h6 class="ms-3 mt-3">Open sessions</h6>
-                <table *ngIf="filteredOpenSessions.length > 0" class="table table-sm ms-3 session-table" style="max-width: 900px">
+                <h6 class="ms-3 mt-3">Active sessions</h6>
+                <table *ngIf="filteredActiveSessions.length > 0" class="table table-sm ms-3 session-table" style="max-width: 900px">
                     <thead>
                         <tr>
                             <th>Session</th>
@@ -906,7 +1371,7 @@ interface BackendOption {
                         </tr>
                     </thead>
                     <tbody>
-                        <tr *ngFor="let s of filteredOpenSessions">
+                        <tr *ngFor="let s of filteredActiveSessions">
                             <td>
                                 <div class="copyable-row">
                                     <code class="small">{{s.cwd}}</code>
@@ -938,7 +1403,8 @@ interface BackendOption {
                             <td class="actions-col text-end">
                                 <div class="d-flex gap-1 justify-content-end">
                                     <button class="btn btn-sm btn-outline-success"
-                                            (click)="resumeSession(s)">Resume</button>
+                                            title="Open a new tab and run claude --resume <id> --fork-session"
+                                            (click)="forkSession(s)">Fork</button>
                                     <button class="btn btn-sm btn-outline-danger"
                                             (click)="forgetSession(s)">✕</button>
                                 </div>
@@ -950,14 +1416,92 @@ interface BackendOption {
                         </tr>
                     </tbody>
                 </table>
-                <div *ngIf="openSessions.length === 0" class="ms-3 text-muted small mb-3">
-                    No open sessions. Run <code>claude</code> in a Tabby tab — a session
-                    appears here as soon as a hook event fires, and moves to history
-                    automatically when you close the tab or Claude ends the session.
+                <div *ngIf="activeSessions.length === 0" class="ms-3 text-muted small mb-3">
+                    No active sessions in this Tabby run. Run <code>claude</code> in a Tabby
+                    tab — a session appears here as soon as a hook event fires. Sessions
+                    Tabby remembers from the previous run are listed below.
                 </div>
-                <div *ngIf="openSessions.length > 0 && filteredOpenSessions.length === 0"
+                <div *ngIf="activeSessions.length > 0 && filteredActiveSessions.length === 0"
                      class="ms-3 text-muted small mb-3">
-                    No open sessions match "{{sessionFilter}}".
+                    No active sessions match "{{sessionFilter}}".
+                </div>
+
+                <div class="ms-3 mt-3" style="max-width: 900px">
+                    <button class="btn btn-sm btn-link ps-0 text-decoration-none"
+                            (click)="previousRunExpanded = !previousRunExpanded">
+                        <i class="fas" [class.fa-chevron-down]="previousRunExpanded"
+                                        [class.fa-chevron-right]="!previousRunExpanded"></i>
+                        Previous run ({{previousRunSessions.length}}<span *ngIf="sessionFilter">, {{filteredPreviousRunSessions.length}} match</span>)
+                    </button>
+
+                    <div *ngIf="previousRunExpanded" class="mt-2">
+                        <div class="text-muted small mb-2">
+                            Sessions Tabby remembers from the previous run. Click <strong>Fork</strong>
+                            to pick up where you left off; otherwise they roll into History next
+                            time Tabby restarts.
+                        </div>
+                        <table *ngIf="filteredPreviousRunSessions.length > 0"
+                               class="table table-sm session-table" style="max-width: 900px">
+                            <thead>
+                                <tr>
+                                    <th>Session</th>
+                                    <th class="actions-col"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr *ngFor="let s of filteredPreviousRunSessions">
+                                    <td>
+                                        <div class="copyable-row">
+                                            <code class="small">{{s.cwd}}</code>
+                                            <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
+                                                    type="button"
+                                                    title="Copy path"
+                                                    (click)="copyToClipboard(s.cwd, 'cwd-' + s.sessionId)">
+                                                <i class="fas"
+                                                   [class.fa-copy]="copiedKey !== 'cwd-' + s.sessionId"
+                                                   [class.fa-check]="copiedKey === 'cwd-' + s.sessionId"></i>
+                                            </button>
+                                        </div>
+                                        <div class="copyable-row small text-muted">
+                                            <code>{{s.sessionId}}</code>
+                                            <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
+                                                    type="button"
+                                                    title="Copy session id"
+                                                    (click)="copyToClipboard(s.sessionId, 'sid-' + s.sessionId)">
+                                                <i class="fas"
+                                                   [class.fa-copy]="copiedKey !== 'sid-' + s.sessionId"
+                                                   [class.fa-check]="copiedKey === 'sid-' + s.sessionId"></i>
+                                            </button>
+                                        </div>
+                                        <div *ngIf="displayTitle(s)" class="small text-muted fst-italic">{{displayTitle(s)}}</div>
+                                        <div *ngIf="displayProfileName(s)" class="small text-muted">
+                                            <i class="fas fa-terminal me-1"></i>{{displayProfileName(s)}}
+                                        </div>
+                                    </td>
+                                    <td class="actions-col text-end">
+                                        <div class="d-flex gap-1 justify-content-end">
+                                            <button class="btn btn-sm btn-outline-success"
+                                                    title="Open a new tab and run claude --resume <id>"
+                                                    (click)="resumeSession(s)">Resume</button>
+                                            <button class="btn btn-sm btn-outline-danger"
+                                                    (click)="forgetSession(s)">✕</button>
+                                        </div>
+                                        <div class="small text-muted mt-1"
+                                             [attr.title]="formatTs(s.lastSeen)">
+                                            {{timeAgo(s.lastSeen)}}
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div *ngIf="previousRunSessions.length === 0" class="text-muted small">
+                            Nothing carried over from the previous run.
+                        </div>
+                        <div *ngIf="previousRunSessions.length > 0 && filteredPreviousRunSessions.length === 0"
+                             class="text-muted small">
+                            No previous-run sessions match "{{sessionFilter}}".
+                        </div>
+                    </div>
                 </div>
 
                 <div class="ms-3 mt-3" style="max-width: 900px">
@@ -986,60 +1530,64 @@ interface BackendOption {
                         </div>
 
                         <div *ngIf="filteredClosedSessions.length > 0"
-                             style="max-height: 360px; overflow-y: auto; border: 1px solid var(--bs-border-color, #333); border-radius: 4px;">
-                            <table class="table table-sm mb-0 session-table">
-                                <thead class="sticky-top"
-                                       style="background: var(--bs-body-bg, #1b1b1b); z-index: 1;">
-                                    <tr>
-                                        <th>Session</th>
-                                        <th class="actions-col"></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr *ngFor="let s of filteredClosedSessions">
-                                        <td>
-                                            <div class="copyable-row">
-                                                <code class="small">{{s.cwd}}</code>
-                                                <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
-                                                        type="button"
-                                                        title="Copy path"
-                                                        (click)="copyToClipboard(s.cwd, 'cwd-' + s.sessionId)">
-                                                    <i class="fas"
-                                                       [class.fa-copy]="copiedKey !== 'cwd-' + s.sessionId"
-                                                       [class.fa-check]="copiedKey === 'cwd-' + s.sessionId"></i>
-                                                </button>
-                                            </div>
-                                            <div class="copyable-row small text-muted">
-                                                <code>{{s.sessionId}}</code>
-                                                <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
-                                                        type="button"
-                                                        title="Copy session id"
-                                                        (click)="copyToClipboard(s.sessionId, 'sid-' + s.sessionId)">
-                                                    <i class="fas"
-                                                       [class.fa-copy]="copiedKey !== 'sid-' + s.sessionId"
-                                                       [class.fa-check]="copiedKey === 'sid-' + s.sessionId"></i>
-                                                </button>
-                                            </div>
-                                            <div *ngIf="displayTitle(s)" class="small text-muted fst-italic">{{displayTitle(s)}}</div>
-                                <div *ngIf="displayProfileName(s)" class="small text-muted">
-                                    <i class="fas fa-terminal me-1"></i>{{displayProfileName(s)}}
-                                </div>
-                                        </td>
-                                        <td class="actions-col text-end">
-                                            <div class="d-flex gap-1 justify-content-end">
-                                                <button class="btn btn-sm btn-outline-success"
-                                                        (click)="resumeSession(s)">Resume</button>
-                                                <button class="btn btn-sm btn-outline-danger"
-                                                        (click)="forgetSession(s)">✕</button>
-                                            </div>
-                                            <div class="small text-muted mt-1"
-                                                 [attr.title]="formatTs(s.lastSeen)">
-                                                {{timeAgo(s.lastSeen)}}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
+                             style="max-height: 720px; overflow-y: auto; border: 1px solid var(--bs-border-color, #333); border-radius: 4px;">
+                            <div *ngFor="let group of groupedClosedSessions"
+                                 class="history-group">
+                                <button type="button"
+                                        class="history-group-header"
+                                        (click)="toggleClosedGroup(group.cwd)">
+                                    <i class="fas me-1"
+                                       [class.fa-chevron-down]="isClosedGroupExpanded(group.cwd)"
+                                       [class.fa-chevron-right]="!isClosedGroupExpanded(group.cwd)"></i>
+                                    <i class="fas fa-folder me-1 text-muted"></i>
+                                    <strong>{{group.basename}}</strong>
+                                    <code class="small text-muted ms-2">{{group.cwd}}</code>
+                                    <span class="text-muted ms-2 small">
+                                        ({{group.sessions.length}})
+                                    </span>
+                                    <span class="text-muted ms-2 small ms-auto"
+                                          [attr.title]="formatTs(group.lastSeen)">
+                                        {{timeAgo(group.lastSeen)}}
+                                    </span>
+                                </button>
+                                <table *ngIf="isClosedGroupExpanded(group.cwd)"
+                                       class="table table-sm mb-0 session-table">
+                                    <tbody>
+                                        <tr *ngFor="let s of group.sessions">
+                                            <td>
+                                                <div class="copyable-row small text-muted">
+                                                    <code>{{s.sessionId}}</code>
+                                                    <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
+                                                            type="button"
+                                                            title="Copy session id"
+                                                            (click)="copyToClipboard(s.sessionId, 'sid-' + s.sessionId)">
+                                                        <i class="fas"
+                                                           [class.fa-copy]="copiedKey !== 'sid-' + s.sessionId"
+                                                           [class.fa-check]="copiedKey === 'sid-' + s.sessionId"></i>
+                                                    </button>
+                                                </div>
+                                                <div *ngIf="displayTitle(s)" class="small text-muted fst-italic">{{displayTitle(s)}}</div>
+                                                <div *ngIf="displayProfileName(s)" class="small text-muted">
+                                                    <i class="fas fa-terminal me-1"></i>{{displayProfileName(s)}}
+                                                </div>
+                                            </td>
+                                            <td class="actions-col text-end">
+                                                <div class="d-flex gap-1 justify-content-end">
+                                                    <button class="btn btn-sm btn-outline-success"
+                                                            title="Open a new tab and run claude --resume <id>"
+                                                            (click)="resumeSession(s)">Resume</button>
+                                                    <button class="btn btn-sm btn-outline-danger"
+                                                            (click)="forgetSession(s)">✕</button>
+                                                </div>
+                                                <div class="small text-muted mt-1"
+                                                     [attr.title]="formatTs(s.lastSeen)">
+                                                    {{timeAgo(s.lastSeen)}}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                         <div *ngIf="closedSessions.length === 0" class="text-muted small">
                             No sessions in history yet.
@@ -1173,6 +1721,12 @@ interface BackendOption {
                 <button class="btn btn-sm btn-outline-secondary" (click)="checkHooks()">
                     Re-check
                 </button>
+                <button class="btn btn-sm btn-outline-danger"
+                        [disabled]="setupRunning || hooksStatus === 'missing'"
+                        (click)="removeHooks({ target: 'all' })"
+                        title="Remove tabby-claude-status entries from every detected ~/.claude/settings.json (Windows + WSL).">
+                    Uninstall hooks
+                </button>
                 <span *ngIf="hooksStatus === 'ok'" class="text-success">All locations configured</span>
                 <span *ngIf="hooksStatus === 'partial'" class="text-warning">Partially configured</span>
                 <span *ngIf="hooksStatus === 'missing'" class="text-danger">Hooks not configured</span>
@@ -1217,6 +1771,125 @@ interface BackendOption {
                         <td>
                             <code class="small">{{loc.path}}</code>
                             <div *ngIf="loc.error" class="small text-muted">{{loc.error}}</div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <!-- Recent activity ─────────────────────────────────────── -->
+            <h5 class="mt-4 mb-2 d-flex align-items-center gap-2">
+                Recent activity
+                <span class="badge text-bg-secondary">{{activityEntries.length}}</span>
+                <button class="btn btn-sm btn-outline-secondary ms-auto"
+                        (click)="refreshActivityLog()"
+                        title="Re-read the activity log from disk">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary"
+                        (click)="copyActivityLogPath()"
+                        [title]="activityLogPath">
+                    <i class="fas fa-copy"></i>
+                    <span class="ms-1">Copy log path</span>
+                </button>
+                <button class="btn btn-sm btn-outline-danger"
+                        [disabled]="activityEntries.length === 0"
+                        (click)="clearActivityLog()">
+                    Clear
+                </button>
+            </h5>
+            <p class="text-muted small mb-2">
+                Every Claude-status event the plugin reacts to. The log persists to
+                <code class="small">{{activityLogPath}}</code> so it can be inspected
+                from outside Tabby.
+                <span *ngIf="!activityFilter">Filter by status to narrow.</span>
+            </p>
+
+            <div class="d-flex gap-2 mb-2 flex-wrap" style="max-width: 1100px">
+                <select class="form-control form-control-sm" style="max-width: 160px"
+                        [(ngModel)]="activityFilter">
+                    <option value="">All statuses</option>
+                    <option *ngFor="let s of activityStatusFilters" [value]="s">{{s}}</option>
+                </select>
+                <input type="text" class="form-control form-control-sm"
+                       style="flex: 1; min-width: 200px"
+                       placeholder="Filter event name / session / payload…"
+                       [(ngModel)]="activityTextFilter" />
+                <button *ngIf="activityFilter || activityTextFilter"
+                        class="btn btn-sm btn-outline-secondary"
+                        (click)="activityFilter = ''; activityTextFilter = ''">
+                    ✕ Clear filters
+                </button>
+            </div>
+
+            <div *ngIf="filteredActivityEntries.length === 0" class="text-muted small mb-3">
+                <span *ngIf="activityEntries.length === 0">
+                    No events recorded yet. Trigger a Claude Code hook (start a session,
+                    submit a prompt, finish a turn) and they'll show up here.
+                </span>
+                <span *ngIf="activityEntries.length > 0">
+                    No entries match the current filter.
+                </span>
+            </div>
+
+            <table *ngIf="filteredActivityEntries.length > 0"
+                   class="table table-sm" style="max-width: 1100px">
+                <thead>
+                    <tr>
+                        <th style="width: 80px">Time</th>
+                        <th style="width: 90px">Status</th>
+                        <th style="width: 150px">Event</th>
+                        <th style="width: 130px">Audio outcome</th>
+                        <th>Detail</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr *ngFor="let e of filteredActivityEntries"
+                        [title]="formatActivityTooltip(e)">
+                        <td><code class="small">{{formatActivityTime(e.ts)}}</code></td>
+                        <td>
+                            <span class="badge"
+                                  [style.background-color]="activityStatusColor(e.status) + ' !important'"
+                                  [style.color]="'#fff !important'">
+                                {{e.status}}
+                            </span>
+                        </td>
+                        <td>
+                            <code class="small">{{e.eventName || '—'}}</code>
+                            <span *ngIf="!e.terminalMatched"
+                                  class="badge text-bg-secondary ms-1"
+                                  title="Fired from a non-Tabby terminal — global audio only.">
+                                global
+                            </span>
+                        </td>
+                        <td>
+                            <span class="badge"
+                                  [class.text-bg-success]="e.audioOutcome === 'announced'"
+                                  [class.text-bg-warning]="e.audioOutcome && e.audioOutcome !== 'announced' && e.audioOutcome !== 'failed'"
+                                  [class.text-bg-danger]="e.audioOutcome === 'failed'"
+                                  [class.text-bg-secondary]="!e.audioOutcome">
+                                {{e.audioOutcome || 'pending'}}
+                            </span>
+                        </td>
+                        <td class="small">
+                            <div *ngIf="e.audioPayload">
+                                <span class="text-muted">{{e.audioMode === 'sound' ? 'sound' : 'tts'}}:</span>
+                                <code class="ms-1">{{e.audioPayload}}</code>
+                            </div>
+                            <div *ngIf="e.audioOutcomeDetail" class="text-muted">
+                                {{e.audioOutcomeDetail}}
+                            </div>
+                            <div *ngIf="e.metadata?.type" class="text-muted">
+                                type: <code>{{e.metadata.type}}</code>
+                            </div>
+                            <div *ngIf="e.metadata?.tool" class="text-muted">
+                                tool: <code>{{e.metadata.tool}}</code>
+                            </div>
+                            <div *ngIf="e.terminalTitle" class="text-muted">
+                                tab: {{e.terminalTitle}}
+                            </div>
+                            <div *ngIf="e.session" class="text-muted">
+                                session: <code>{{e.session.substring(0, 8)}}…</code>
+                            </div>
                         </td>
                     </tr>
                 </tbody>
@@ -1308,6 +1981,21 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     downloadingId = ''
     downloadAllResult = ''
     soundCacheDir = ''
+
+    // Piper voice catalog modal state. The catalog is fetched once per
+    // open (no aggressive caching beyond the in-memory list), and
+    // `installedKeys` is recomputed every modal open so the "Installed"
+    // badge always reflects what's on disk.
+    showPiperVoiceCatalog = false
+    piperCatalog: PiperVoiceCatalogEntry[] = []
+    piperCatalogLoading = false
+    piperCatalogError = ''
+    piperCatalogLanguageFilter = ''
+    piperCatalogTextFilter = ''
+    piperDownloadingKey = ''
+    piperDownloadStatus = ''
+    piperInstalledKeys: Set<string> = new Set()
+    piperModelsDir = ''
     private languageDisplayNames: Intl.DisplayNames | null = (() => {
         try { return new Intl.DisplayNames(['en'], { type: 'language' }) } catch { return null }
     })()
@@ -1341,8 +2029,23 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     piperInstallError = ''
     piperDetectedInstallers: string[] = []
 
+    readonly dynamicStatuses = ['done', 'question'] as const
+    dynamicTesting: 'done' | 'question' | '' = ''
+    dynamicTestResult: { status: 'done' | 'question'; kind: 'ok' | 'error'; message: string } | null = null
+    credStatus: CredentialsStatus | null = null
+
+    activityEntries: ActivityLogEntry[] = []
+    activityFilter: '' | 'working' | 'question' | 'done' | 'error' | 'idle' = ''
+    activityTextFilter = ''
+    readonly activityStatusFilters = ['working', 'question', 'done', 'error', 'idle'] as const
+    activityLogPath = ''
+    private activityUnsubscribe: (() => void) | null = null
+
     historyExpanded = false
+    previousRunExpanded = true
     sessionFilter = ''
+    /** cwds whose history group is expanded; collapsed by default to keep the list scannable. */
+    expandedClosedGroups: Set<string> = new Set()
     copiedKey = ''
     setupDropdownOpen = false
     setupRunning = false
@@ -1439,6 +2142,10 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         private sessionRestore: SessionRestoreService,
         public piperInstaller: PiperInstallerService,
         private soundService: SoundService,
+        private activityLog: StatusActivityLogService,
+        private claudeApi: ClaudeApiService,
+        private transcriptReader: TranscriptReaderService,
+        private credentialsService: ClaudeCredentialsService,
     ) {}
 
     ngOnInit(): void {
@@ -1466,6 +2173,25 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         }
         if (!this.config.store.claudeStatus.audio.mode) {
             this.config.store.claudeStatus.audio.mode = DEFAULT_AUDIO_CONFIG.mode
+        }
+        // Backfill dynamic-phrase config for users upgrading from <=1.2.x.
+        // Deep-merge so newly-added per-status entries appear without
+        // clobbering user customizations.
+        if (!this.config.store.claudeStatus.audio.dynamic) {
+            this.config.store.claudeStatus.audio.dynamic = JSON.parse(JSON.stringify(DEFAULT_AUDIO_CONFIG.dynamic))
+        } else {
+            const dyn = this.config.store.claudeStatus.audio.dynamic
+            const def = DEFAULT_AUDIO_CONFIG.dynamic
+            if (dyn.apiKey == null) dyn.apiKey = def.apiKey
+            if (!dyn.model) dyn.model = def.model
+            if (!dyn.maxOutputTokens) dyn.maxOutputTokens = def.maxOutputTokens
+            if (!dyn.timeoutMs) dyn.timeoutMs = def.timeoutMs
+            if (!dyn.perStatus) dyn.perStatus = JSON.parse(JSON.stringify(def.perStatus))
+            for (const s of ['done', 'question'] as const) {
+                if (!dyn.perStatus[s]) {
+                    dyn.perStatus[s] = JSON.parse(JSON.stringify(def.perStatus[s]))
+                }
+            }
         }
         if (this.config.store.claudeStatus.audio.muteTtsDuringMicActive == null) {
             this.config.store.claudeStatus.audio.muteTtsDuringMicActive =
@@ -1532,6 +2258,15 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         if (this.config.store.claudeStatus.audio?.mode === 'sound') {
             this.refreshSoundLibrary()
         }
+
+        // Activity log: live-refresh while the settings tab is open so new
+        // events appear without a manual reload. Subscription is cheap (the
+        // service notifies in-process; no IO).
+        this.activityLogPath = this.activityLog.filePath
+        this.refreshActivityLog()
+        this.activityUnsubscribe = this.activityLog.subscribe(() => this.refreshActivityLog())
+
+        this.refreshCredStatus()
     }
 
     refreshPiperState(): void {
@@ -1758,8 +2493,19 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     }
 
     getSelectedVoiceId(): string {
-        const backendId = this.config.store.claudeStatus?.audio?.backend as TtsBackendId
-        return this.config.store.claudeStatus?.audio?.voicesByBackend?.[backendId] || ''
+        const audio = this.config.store.claudeStatus?.audio
+        const backendId = audio?.backend as TtsBackendId
+        const stored = audio?.voicesByBackend?.[backendId] || ''
+        // Piper has no separate "voice" concept — the model path IS the
+        // voice. If the dropdown is empty but the user has a model path
+        // configured (typically via the path field below or the installer),
+        // surface it so the trigger label matches reality. Without this, the
+        // dropdown reads "(default for this backend)" even though Piper is
+        // actively using en_US-lessac-medium.
+        if (backendId === 'piper' && !stored && audio?.piperModelPath) {
+            return audio.piperModelPath
+        }
+        return stored
     }
 
     onVoiceChange(voiceId: string): void {
@@ -1773,6 +2519,13 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         // Keep legacy field in sync for Web Speech so old code paths don't regress.
         if (backendId === 'webspeech') {
             this.config.store.claudeStatus.audio.voiceName = voiceId
+        }
+        // For Piper, the dropdown is the canonical control — push the
+        // selection into piperModelPath so the path field below mirrors it
+        // and the backend (which reads piperModelPath) actually uses the
+        // newly-selected voice.
+        if (backendId === 'piper' && voiceId) {
+            this.config.store.claudeStatus.audio.piperModelPath = voiceId
         }
         console.info(
             '[claude-status] Voice saved for backend',
@@ -1942,6 +2695,159 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         this.showOnlineCatalog = false
     }
 
+    // ── Piper voice catalog modal ──────────────────────────────────
+
+    async openPiperVoiceCatalog(): Promise<void> {
+        this.showPiperVoiceCatalog = true
+        this.piperCatalogError = ''
+        this.refreshPiperInstalledKeys()
+        const installPaths = this.piperInstaller.getInstallPaths()
+        this.piperModelsDir = path.dirname(installPaths.modelPath)
+        if (this.piperCatalog.length) return
+        this.piperCatalogLoading = true
+        try {
+            this.piperCatalog = await this.piperInstaller.fetchVoiceCatalog()
+            if (this.piperCatalog.length === 0) {
+                this.piperCatalogError = 'Voice catalog returned no entries — Hugging Face may be unreachable.'
+            }
+        } catch (err) {
+            this.piperCatalogError = err instanceof Error ? err.message : String(err)
+        } finally {
+            this.piperCatalogLoading = false
+        }
+    }
+
+    closePiperVoiceCatalog(): void {
+        this.showPiperVoiceCatalog = false
+    }
+
+    clearPiperCatalogFilters(): void {
+        this.piperCatalogLanguageFilter = ''
+        this.piperCatalogTextFilter = ''
+    }
+
+    /** Total catalog count (used by the "All languages (N)" select option). */
+    get piperCatalogTotalCount(): number {
+        return this.piperCatalog.length
+    }
+
+    get piperCatalogLanguageOptions(): { code: string; name: string; count: number }[] {
+        const counts = new Map<string, { name: string; count: number }>()
+        for (const v of this.piperCatalog) {
+            const code = v.languageFamily || v.languageCode || 'unknown'
+            const name = v.language || code
+            const cur = counts.get(code)
+            if (cur) cur.count++
+            else counts.set(code, { name, count: 1 })
+        }
+        return [...counts]
+            .map(([code, { name, count }]) => ({ code, name, count }))
+            .sort((a, b) => {
+                if (a.code === 'en' && b.code !== 'en') return -1
+                if (b.code === 'en' && a.code !== 'en') return 1
+                return a.name.localeCompare(b.name)
+            })
+    }
+
+    get filteredPiperCatalog(): PiperVoiceCatalogEntry[] {
+        const text = this.piperCatalogTextFilter.trim().toLowerCase()
+        const lang = this.piperCatalogLanguageFilter
+        return this.piperCatalog.filter(v => {
+            if (lang && v.languageFamily !== lang && v.languageCode !== lang) return false
+            if (text) {
+                const hay = `${v.key} ${v.name} ${v.language}`.toLowerCase()
+                if (!hay.includes(text)) return false
+            }
+            return true
+        })
+    }
+
+    isPiperVoiceDownloaded(key: string): boolean {
+        return this.piperInstalledKeys.has(key)
+    }
+
+    formatBytes(n: number): string {
+        if (!n) return '—'
+        if (n < 1024) return `${n} B`
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+        return `${(n / 1024 / 1024).toFixed(1)} MB`
+    }
+
+    /**
+     * Download a voice from the catalog. After the download finishes:
+     *  - the on-disk index is refreshed so the "Installed" badge appears,
+     *  - the TTS voice list for Piper is reloaded so the dropdown picks up
+     *    the new file without a Tabby restart,
+     *  - the per-voice progress text is reset.
+     */
+    async downloadPiperVoice(
+        entry: PiperVoiceCatalogEntry,
+    ): Promise<void> {
+        this.piperDownloadingKey = entry.key
+        this.piperDownloadStatus = ''
+        this.piperCatalogError = ''
+        try {
+            await this.piperInstaller.downloadVoice(entry, p => {
+                if (p.bytesTotal) {
+                    const pct = Math.floor((p.bytesReceived || 0) / p.bytesTotal * 100)
+                    this.piperDownloadStatus = `${pct}%`
+                } else {
+                    this.piperDownloadStatus = '…'
+                }
+            })
+            this.refreshPiperInstalledKeys()
+            await this.reloadPiperVoices()
+        } catch (err) {
+            this.piperCatalogError = `Download failed: ${err instanceof Error ? err.message : String(err)}`
+        } finally {
+            this.piperDownloadingKey = ''
+            this.piperDownloadStatus = ''
+        }
+    }
+
+    /**
+     * Set the chosen voice as the active Piper model. Updates piperModelPath
+     * (the canonical setting the backend reads) and clears voicesByBackend
+     * so getSelectedVoiceId()'s Piper-fallback to piperModelPath kicks in.
+     */
+    usePiperVoice(key: string): void {
+        const installed = this.piperInstaller.listInstalledVoices().find(v => v.key === key)
+        if (!installed) return
+        this.config.store.claudeStatus.audio.piperModelPath = installed.modelPath
+        this.config.store.claudeStatus.audio.voicesByBackend = {
+            ...(this.config.store.claudeStatus.audio.voicesByBackend || {}),
+            piper: installed.modelPath,
+        }
+        this.save()
+        this.reloadPiperVoices()
+        this.closePiperVoiceCatalog()
+    }
+
+    private refreshPiperInstalledKeys(): void {
+        const next = new Set<string>()
+        for (const v of this.piperInstaller.listInstalledVoices()) next.add(v.key)
+        this.piperInstalledKeys = next
+    }
+
+    /**
+     * Re-query the Piper backend's voice list and shove it into the
+     * voicesByBackend bookkeeping so the existing voice dropdown rerenders
+     * with the freshly-downloaded entries. Mirrors the loadVoicesForBackend
+     * pattern used elsewhere in this component.
+     */
+    private async reloadPiperVoices(): Promise<void> {
+        const piper = this.audioService.getBackend('piper')
+        const audio = this.config.store.claudeStatus.audio
+        ;(piper as any).configure?.(audio.piperExePath, audio.piperModelPath)
+        try {
+            const voices = await piper.listVoices()
+            const target = this.backends.find(b => b.id === 'piper')
+            if (target) target.voices = voices
+        } catch (err) {
+            console.warn('[claude-status] reloadPiperVoices failed:', err)
+        }
+    }
+
     async downloadCatalogEntry(entry: OnlineSoundEntry): Promise<void> {
         this.downloadingId = entry.id
         this.onlineCatalogError = ''
@@ -2022,20 +2928,77 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         this.sessions = this.sessionRestore.list()
     }
 
-    get openSessions(): ClaudeSessionRecord[] {
-        return this.sessions.filter(s => !s.closed)
+    get activeSessions(): ClaudeSessionRecord[] {
+        return this.sessionRestore.activeSessions()
+    }
+
+    get previousRunSessions(): ClaudeSessionRecord[] {
+        return this.sessionRestore.previousRunSessions()
     }
 
     get closedSessions(): ClaudeSessionRecord[] {
         return this.sessions.filter(s => !!s.closed)
     }
 
-    get filteredOpenSessions(): ClaudeSessionRecord[] {
-        return this.applySessionFilter(this.openSessions)
+    /** Active + previous-run combined — used by the bulk "Mark all as closed" action. */
+    get openSessions(): ClaudeSessionRecord[] {
+        return this.sessions.filter(s => !s.closed)
+    }
+
+    get filteredActiveSessions(): ClaudeSessionRecord[] {
+        return this.applySessionFilter(this.activeSessions)
+    }
+
+    get filteredPreviousRunSessions(): ClaudeSessionRecord[] {
+        return this.applySessionFilter(this.previousRunSessions)
     }
 
     get filteredClosedSessions(): ClaudeSessionRecord[] {
         return this.applySessionFilter(this.closedSessions)
+    }
+
+    /**
+     * History sessions grouped by `cwd`, newest group first. Within each
+     * group, sessions are sorted newest-first. Used by the Sessions tab to
+     * render history collapsibly per folder so dozens of sessions in the
+     * same project don't dominate the list.
+     */
+    get groupedClosedSessions(): { cwd: string; basename: string; lastSeen: number; sessions: ClaudeSessionRecord[] }[] {
+        const byCwd = new Map<string, ClaudeSessionRecord[]>()
+        for (const s of this.filteredClosedSessions) {
+            const key = s.cwd || '(unknown)'
+            if (!byCwd.has(key)) byCwd.set(key, [])
+            byCwd.get(key)!.push(s)
+        }
+        const groups: { cwd: string; basename: string; lastSeen: number; sessions: ClaudeSessionRecord[] }[] = []
+        for (const [cwd, sessions] of byCwd) {
+            sessions.sort((a, b) => b.lastSeen - a.lastSeen)
+            groups.push({
+                cwd,
+                basename: this.cwdBasename(cwd),
+                lastSeen: sessions[0].lastSeen,
+                sessions,
+            })
+        }
+        groups.sort((a, b) => b.lastSeen - a.lastSeen)
+        return groups
+    }
+
+    /** Return the last path segment (handles both Windows and POSIX separators). */
+    private cwdBasename(cwd: string): string {
+        if (!cwd) return '(unknown)'
+        const trimmed = cwd.replace(/[/\\]+$/, '')
+        const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+        return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
+    }
+
+    isClosedGroupExpanded(cwd: string): boolean {
+        return this.expandedClosedGroups.has(cwd)
+    }
+
+    toggleClosedGroup(cwd: string): void {
+        if (this.expandedClosedGroups.has(cwd)) this.expandedClosedGroups.delete(cwd)
+        else this.expandedClosedGroups.add(cwd)
     }
 
     private applySessionFilter(list: ClaudeSessionRecord[]): ClaudeSessionRecord[] {
@@ -2080,9 +3043,14 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     }
 
     onFilterChange(): void {
-        // Auto-expand history when typing so matches there become visible.
-        if (this.sessionFilter.trim() && this.filteredClosedSessions.length > 0) {
-            this.historyExpanded = true
+        // Auto-expand collapsed buckets when typing so matches become visible.
+        if (!this.sessionFilter.trim()) return
+        if (this.filteredClosedSessions.length > 0) this.historyExpanded = true
+        if (this.filteredPreviousRunSessions.length > 0) this.previousRunExpanded = true
+        // Also expand any history group with at least one match so the user
+        // sees the matched session without an extra click.
+        for (const group of this.groupedClosedSessions) {
+            this.expandedClosedGroups.add(group.cwd)
         }
     }
 
@@ -2153,15 +3121,175 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
             clearTimeout(this.setupResultTimer)
             this.setupResultTimer = null
         }
+        if (this.activityUnsubscribe) {
+            this.activityUnsubscribe()
+            this.activityUnsubscribe = null
+        }
         document.removeEventListener('click', this.docClickListener, true)
     }
 
+    // ── Subscription credentials (Audio tab → Dynamic mode) ─────────
+
+    /** Re-read ~/.claude/.credentials.json and refresh the displayed status. */
+    refreshCredStatus(): void {
+        this.credentialsService.invalidate()
+        this.credStatus = this.credentialsService.getStatus()
+    }
+
+    formatExpiry(expiresAt: number): string {
+        if (!expiresAt) return 'unknown'
+        try {
+            return new Date(expiresAt).toLocaleString()
+        } catch {
+            return new Date(expiresAt).toISOString()
+        }
+    }
+
+    // ── Dynamic phrase test (Audio tab) ──────────────────────────────
+
+    /**
+     * Generate a test phrase for the given status using whatever the user
+     * just typed into the prompt template. Doesn't go through the audio
+     * pipeline's mute gates — preview only. Speaks the result if TTS is
+     * configured, and prints it to the result row regardless.
+     */
+    async testDynamicPhrase(status: 'done' | 'question'): Promise<void> {
+        if (this.dynamicTesting) return
+        this.dynamicTesting = status
+        this.dynamicTestResult = null
+        try {
+            const audio = this.config.store.claudeStatus.audio
+            const cfg = audio.dynamic
+            const statusCfg = cfg.perStatus[status]
+
+            // Try to find the most recent matching entry in the activity log
+            // for realistic context; fall back to a synthesized payload.
+            const recent = this.activityLog.list().find(e =>
+                e.status === status && e.metadata,
+            )
+            const ctx = {
+                status,
+                eventName: recent?.eventName ?? (status === 'done' ? 'Stop' : 'PermissionRequest'),
+                metadata: recent?.metadata as Record<string, unknown> | undefined,
+                transcript: undefined as any,
+            }
+
+            let phrase: string | null = null
+            if (statusCfg.transcriptOnly) {
+                this.dynamicTestResult = {
+                    status,
+                    kind: 'error',
+                    message: 'Transcript-only mode requires a live hook event — trigger Claude and watch the activity log instead.',
+                }
+                return
+            }
+            phrase = await this.claudeApi.generatePhrase(ctx, cfg, statusCfg.promptTemplate)
+            if (phrase) {
+                this.dynamicTestResult = { status, kind: 'ok', message: phrase }
+                this.audioService.speakText(phrase, audio).catch(() => { /* preview is best-effort */ })
+            } else {
+                this.dynamicTestResult = {
+                    status,
+                    kind: 'error',
+                    message: 'API call failed or timed out. Check your API key, model id, and timeout setting.',
+                }
+            }
+        } catch (err: any) {
+            this.dynamicTestResult = {
+                status,
+                kind: 'error',
+                message: err?.message || String(err),
+            }
+        } finally {
+            this.dynamicTesting = ''
+        }
+    }
+
+    // ── Activity log (Hooks tab) ────────────────────────────────────
+
+    refreshActivityLog(): void {
+        this.activityEntries = this.activityLog.list()
+    }
+
+    clearActivityLog(): void {
+        this.activityLog.clear()
+        this.activityEntries = []
+    }
+
+    copyActivityLogPath(): void {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { clipboard } = require('electron')
+            clipboard.writeText(this.activityLogPath)
+        } catch {
+            try { (navigator as any).clipboard?.writeText(this.activityLogPath) } catch { /* noop */ }
+        }
+    }
+
+    get filteredActivityEntries(): ActivityLogEntry[] {
+        const text = this.activityTextFilter.trim().toLowerCase()
+        return this.activityEntries.filter(e => {
+            if (this.activityFilter && e.status !== this.activityFilter) return false
+            if (!text) return true
+            const haystack = [
+                e.eventName, e.session, e.audioPayload,
+                e.audioOutcome, e.audioOutcomeDetail, e.terminalTitle,
+                JSON.stringify(e.metadata || {}),
+            ].filter(Boolean).join(' ').toLowerCase()
+            return haystack.includes(text)
+        })
+    }
+
+    formatActivityTime(ts: number): string {
+        const d = new Date(ts)
+        const pad = (n: number) => n.toString().padStart(2, '0')
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    }
+
+    formatActivityTooltip(entry: ActivityLogEntry): string {
+        const lines: string[] = []
+        lines.push(`${new Date(entry.ts).toLocaleString()} — ${entry.status}`)
+        if (entry.eventName) lines.push(`event: ${entry.eventName}`)
+        if (entry.source) lines.push(`source: ${entry.source}`)
+        if (entry.audioOutcome) lines.push(`audio: ${entry.audioOutcome}${entry.audioOutcomeDetail ? ' — ' + entry.audioOutcomeDetail : ''}`)
+        if (entry.session) lines.push(`session: ${entry.session}`)
+        if (entry.metadata) lines.push(`meta: ${JSON.stringify(entry.metadata)}`)
+        return lines.join('\n')
+    }
+
+    activityStatusColor(status: string): string {
+        const colors: Record<string, string> = {
+            working: '#0d6efd',
+            question: '#3b82f6',
+            done: '#198754',
+            error: '#dc3545',
+            idle: '#6c757d',
+        }
+        return colors[status] || '#6c757d'
+    }
+
     async resumeSession(session: ClaudeSessionRecord): Promise<void> {
-        await this.sessionRestore.resumeSession(session)
+        await this.sessionRestore.resumeSession(session, 'resume')
+    }
+
+    /** Open a new tab forked off an active session (claude --resume <id> --fork-session). */
+    async forkSession(session: ClaudeSessionRecord): Promise<void> {
+        await this.sessionRestore.resumeSession(session, 'fork')
     }
 
     async resumeAllSessions(): Promise<void> {
         await this.sessionRestore.resumeAll()
+    }
+
+    /**
+     * Bulk-resume all sessions that were active in the previous Tabby run.
+     * Active-this-run sessions are excluded — those are already running, so
+     * "resume" wouldn't make sense for them.
+     */
+    async resumeAllPreviousRun(): Promise<void> {
+        for (const s of this.sessionRestore.previousRunSessions()) {
+            await this.sessionRestore.resumeSession(s, 'resume')
+        }
     }
 
     forgetSession(session: ClaudeSessionRecord): void {
@@ -2453,6 +3581,118 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
             this.setupResultTimer = null
         }, 6000)
         this.checkHooks()
+    }
+
+    /**
+     * Strip every tabby-claude-status hook from each target's settings.json.
+     * Symmetric to `setupHooks()` — preserves any non-tabby hooks the user
+     * has configured (other extensions like Claude-Code-Agent-Monitor).
+     */
+    removeHooks(choice: SetupChoice): void {
+        if (this.setupRunning) return
+        this.setupRunning = true
+        this.setupResult = null
+
+        const targets: SetupTarget[] = []
+        if (choice.target === 'windows' || choice.target === 'all') {
+            targets.push({ kind: 'windows', label: 'Windows' })
+        }
+        if (choice.target === 'wsl' && choice.distro) {
+            const settingsPath = this.findWslSettingsPath(choice.distro)
+            if (settingsPath) {
+                targets.push({
+                    kind: 'wsl',
+                    label: `WSL ${choice.distro}`,
+                    distro: choice.distro,
+                    settingsPath,
+                })
+            }
+        }
+        if (choice.target === 'all') {
+            for (const distro of this.wslDistros) {
+                const settingsPath = this.findWslSettingsPath(distro)
+                if (settingsPath) {
+                    targets.push({
+                        kind: 'wsl',
+                        label: `WSL ${distro}`,
+                        distro,
+                        settingsPath,
+                    })
+                }
+            }
+        }
+
+        const successes: string[] = []
+        const failures: string[] = []
+        let totalRemoved = 0
+        for (const target of targets) {
+            try {
+                const removed = this.removeHooksFromTarget(target)
+                totalRemoved += removed
+                if (removed > 0) successes.push(`${target.label} (${removed})`)
+            } catch (e: any) {
+                console.error(`[claude-status] Failed to remove hooks for ${target.label}:`, e)
+                failures.push(`${target.label}: ${e?.message || e}`)
+            }
+        }
+
+        this.setupRunning = false
+        if (failures.length === 0) {
+            this.setupResult = {
+                kind: 'ok',
+                message: totalRemoved === 0
+                    ? 'No tabby-claude-status hooks were configured anywhere.'
+                    : `Removed ${totalRemoved} hook entr${totalRemoved === 1 ? 'y' : 'ies'} from ${successes.join(', ')}`,
+            }
+        } else {
+            this.setupResult = {
+                kind: 'error',
+                message: `Failed: ${failures.join(' · ')}`,
+            }
+        }
+        if (this.setupResultTimer) clearTimeout(this.setupResultTimer)
+        this.setupResultTimer = setTimeout(() => {
+            this.setupResult = null
+            this.setupResultTimer = null
+        }, 6000)
+        this.checkHooks()
+    }
+
+    /**
+     * Remove every tabby-claude-status command from `target`'s settings.json
+     * and return the number of entries removed. Empty matcher groups and
+     * empty hook-event arrays are pruned. The `hooks` key itself is left in
+     * place even if empty, since the user may want to add hooks back later.
+     */
+    private removeHooksFromTarget(target: SetupTarget): number {
+        const settingsPath = target.kind === 'windows'
+            ? path.join(os.homedir(), '.claude', 'settings.json')
+            : target.settingsPath
+        if (!settingsPath || !fs.existsSync(settingsPath)) return 0
+
+        const settings: any = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+        if (!settings || typeof settings !== 'object' || !settings.hooks) return 0
+
+        let removed = 0
+        for (const event of Object.keys(settings.hooks)) {
+            const matcherGroups: any[] = settings.hooks[event]
+            if (!Array.isArray(matcherGroups)) continue
+            for (const group of matcherGroups) {
+                if (!Array.isArray(group?.hooks)) continue
+                const before = group.hooks.length
+                group.hooks = group.hooks.filter(
+                    (h: any) => !(h?.type === 'command' && this.isTabbyHookCommand(h.command)),
+                )
+                removed += before - group.hooks.length
+            }
+            settings.hooks[event] = matcherGroups.filter(g => Array.isArray(g?.hooks) && g.hooks.length > 0)
+            if (settings.hooks[event].length === 0) delete settings.hooks[event]
+        }
+
+        if (removed > 0) {
+            fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+        }
+        return removed
     }
 
     private writeHooksToTarget(target: SetupTarget): void {

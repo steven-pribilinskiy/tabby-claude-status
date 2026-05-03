@@ -146,6 +146,11 @@ process.stdin.on('end', () => {
         // `cwd` is sent in the hook payload by Claude Code; capture it so the
         // plugin can spawn a restored tab in the same directory later.
         if (event.cwd) status.cwd = event.cwd
+        // `transcript_path` is the JSONL session log Claude Code maintains.
+        // The dynamic-phrase audio mode reads the tail of this file to derive
+        // a context-aware announcement; without forwarding it we'd need a
+        // separate session→path lookup on the plugin side.
+        if (event.transcript_path) status.transcript_path = event.transcript_path
         fs.writeFileSync(STATUS_FILE, JSON.stringify(status))
 
         // Fire-and-forget seed to windows-settings so the server's
