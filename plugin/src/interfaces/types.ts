@@ -362,6 +362,19 @@ export interface ClaudeSessionRestoreConfig {
      * cache is per-cwd.
      */
     resumeCdDelaySec: number
+    /**
+     * Seconds to wait between `terminalService.openTab(...)` returning and
+     * the FIRST `cd "<cwd>"\r` keystroke being sent. Originally this was
+     * hard-coded at 800 ms, which is fine for an already-warm WSL distro
+     * but loses input on a cold-boot WSL or a slow shell init (oh-my-zsh
+     * sourcing, nvm.lazy, fnm, starship pre-prompt) — the pty isn't
+     * accepting input yet, the cd line vanishes into a buffer that gets
+     * cleared by the prompt redraw, and the user's tab opens at the
+     * profile's default cwd (~/projects) with no cd, no resume, just a
+     * fresh prompt. Bumping this past your shell's startup time makes
+     * Resume reliable; default is 1.5 s.
+     */
+    resumeOpenDelaySec: number
 }
 
 /**
@@ -405,6 +418,7 @@ export const DEFAULT_SESSION_RESTORE_CONFIG: ClaudeSessionRestoreConfig = {
     // defeats the whole point of auto-resume.
     extraArgs: '--dangerously-skip-permissions',
     resumeCdDelaySec: 1.2,
+    resumeOpenDelaySec: 1.5,
 }
 
 /**

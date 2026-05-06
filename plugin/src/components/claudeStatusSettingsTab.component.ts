@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit } from '@angular/core'
+import { Component, DoCheck, OnDestroy, OnInit } from '@angular/core'
 import { ConfigService } from 'tabby-core'
 import { AudioService } from '../services/audioService'
 import {
@@ -16,16 +16,20 @@ import { SessionRestoreService } from '../services/sessionRestoreService'
 import { PiperInstallerService, PiperVoiceCatalogEntry } from '../services/piperInstallerService'
 import { OnlineSoundEntry, SoundEntry, SoundService } from '../services/soundService'
 import { ActivityLogEntry, StatusActivityLogService } from '../services/statusActivityLogService'
-import { ClaudeApiService } from '../services/claudeApiService'
+import { ClaudeApiService, ClaudeModelOption } from '../services/claudeApiService'
 import { ClaudeCredentialsService, CredentialsStatus } from '../services/claudeCredentialsService'
 import { TranscriptReaderService } from '../services/transcriptReaderService'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PLUGIN_PACKAGE = require('../../package.json') as { version: string; homepage?: string }
 
 import * as fs from 'fs'
+import * as fsp from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
-import { execFileSync, execSync } from 'child_process'
+import { execFile, execFileSync, execSync } from 'child_process'
+import { promisify } from 'util'
+
+const execFileAsync = promisify(execFile)
 
 export interface HookLocationStatus {
     label: string
@@ -35,6 +39,14 @@ export interface HookLocationStatus {
     configuredEvents: number
     missingEvents: string[]
     error?: string
+    /** True while this location's settings.json is still being read /
+     *  analysed by `checkHooks`. The tab badge shows a spinner instead
+     *  of the configured/total count while this is set. Without this,
+     *  re-checks would briefly flash the OLD count for each tab while
+     *  the new scan was in flight, then snap to the new value all at
+     *  once — what the user observed as "1/9 → ... → 9/9 reactivity
+     *  weirdness" after Setup hooks. */
+    isLoading?: boolean
 }
 
 const HOOK_EVENTS = [
@@ -89,6 +101,11 @@ interface BackendOption {
             color: var(--bs-body-color, inherit);
             cursor: pointer;
         }
+        .history-group-header {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.15rem;
+        }
         .history-group-header:hover {
             background: rgba(128, 128, 128, 0.08);
         }
@@ -96,6 +113,15 @@ interface BackendOption {
             background: transparent;
             color: var(--bs-secondary-color, #888);
             padding: 0;
+        }
+        /* Indent the path so it lines up under the basename, after the
+           chevron + folder icons (≈2.4em of glyphs at 1em line-height). */
+        .history-group-path {
+            padding-left: 2.4em;
+            word-break: break-all;
+        }
+        .history-group-path code {
+            font-size: 0.85em;
         }
         .copyable-row .copy-btn {
             opacity: 0;
@@ -289,6 +315,112 @@ interface BackendOption {
             font-size: 0.7rem;
             padding: 0 0.45rem;
             line-height: 1.4;
+        }
+
+        /* Sub-tabs for the Hooks view: one tab per detected
+           ~/.claude/settings.json (Windows + each WSL distro). Visually
+           similar to .settings-tabs but slightly tighter and carries a
+           per-tab status badge. */
+        .hook-location-tabs {
+            list-style: none;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.25rem;
+            padding: 0;
+            margin: 0 0 1rem 0;
+            border-bottom: 1px solid var(--bs-border-color, rgba(128, 128, 128, 0.25));
+        }
+        .hook-location-tabs .nav-link {
+            cursor: pointer;
+            padding: 0.4rem 0.75rem;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-top-left-radius: 0.375rem;
+            border-top-right-radius: 0.375rem;
+            color: inherit;
+            opacity: 0.65;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            margin-bottom: -1px;
+            font-size: 0.92em;
+        }
+        .hook-location-tabs .nav-link:hover {
+            opacity: 0.95;
+            background-color: rgba(128, 128, 128, 0.1);
+        }
+        .hook-location-tabs .nav-link.active {
+            opacity: 1;
+            background-color: var(--bs-body-bg, transparent);
+            border-color: var(--bs-border-color, rgba(128, 128, 128, 0.35));
+            border-bottom-color: var(--bs-body-bg, transparent);
+            /* Coloured underline so the active tab reads at a glance,
+               regardless of theme. The flush bottom border alone (which
+               just merges the tab into the body) wasn't enough — users
+               couldn't tell which tab was selected. */
+            box-shadow: inset 0 -3px 0 var(--bs-primary, #0d6efd);
+        }
+        .hook-location-tabs .nav-link.disabled {
+            cursor: default;
+        }
+        .hook-location-tabs .hook-location-icon {
+            font-size: 0.95em;
+        }
+        .hook-location-tabs .hook-location-badge {
+            font-size: 0.72em;
+            padding: 0.05em 0.45em;
+            border-radius: 999px;
+            line-height: 1.4;
+        }
+        .hook-event-list li {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 0.85rem;
+            margin-bottom: 0.25rem;
+        }
+
+        /* Local spin keyframe — Tabby's bundled FontAwesome variant
+           occasionally lacks the .fa-spin animation rule (depending on
+           which iconset Tabby pulls in), so a static .fa-spinner just
+           sits there. We attach this to a <i class="cs-spin"> wherever
+           we need a guaranteed-spinning icon. */
+        @keyframes cs-spin {
+            from { transform: rotate(0deg); }
+            to   { transform: rotate(360deg); }
+        }
+        .cs-spin {
+            animation: cs-spin 1s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes cs-skeleton-pulse {
+            0%, 100% { opacity: 0.55; }
+            50%      { opacity: 0.85; }
+        }
+        .cs-skeleton {
+            display: inline-block;
+            background: rgba(128, 128, 128, 0.22);
+            border-radius: 0.25rem;
+            color: transparent;
+            user-select: none;
+            min-width: 4em;
+            animation: cs-skeleton-pulse 1.2s ease-in-out infinite;
+        }
+        .cs-skeleton.cs-skeleton-row {
+            display: block;
+            height: 1.1em;
+            margin: 0.15rem 0;
+        }
+        .cs-loading {
+            color: var(--bs-secondary-color, #888);
+            font-size: 0.92em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .cs-loading .fa-spinner {
+            opacity: 0.7;
         }
     `],
     template: `
@@ -581,7 +713,13 @@ interface BackendOption {
                     </p>
 
                     <!-- Subscription status (primary auth path) -->
-                    <div *ngIf="credStatus" class="claude-alert mb-2"
+                    <div *ngIf="credStatusLoading" class="claude-alert mb-2" style="max-width: 700px">
+                        <span class="cs-loading">
+                            <i class="fas fa-spinner cs-spin"></i>
+                            Reading <code>~/.claude/.credentials.json</code>…
+                        </span>
+                    </div>
+                    <div *ngIf="!credStatusLoading && credStatus" class="claude-alert mb-2"
                          [class.claude-alert-success]="credStatus.state === 'ok'"
                          [class.claude-alert-warning]="credStatus.state === 'expired' || credStatus.state === 'no-inference-scope'"
                          [class.claude-alert-danger]="credStatus.state === 'missing-file' || credStatus.state === 'no-oauth' || credStatus.state === 'read-error'"
@@ -634,7 +772,7 @@ interface BackendOption {
                     </div>
 
                     <!-- API key fallback (only shown when subscription isn't usable) -->
-                    <div *ngIf="!credStatus || credStatus.state !== 'ok'" class="form-group mb-3">
+                    <div *ngIf="!credStatusLoading && (!credStatus || credStatus.state !== 'ok')" class="form-group mb-3">
                         <label class="form-label">Anthropic API key (fallback)</label>
                         <input type="password" class="form-control" style="max-width: 480px"
                                [(ngModel)]="config.store.claudeStatus.audio.dynamic.apiKey"
@@ -651,11 +789,34 @@ interface BackendOption {
 
                     <div class="row mb-3" style="max-width: 700px">
                         <div class="col-4">
-                            <label class="form-label">Model</label>
-                            <input type="text" class="form-control"
-                                   [(ngModel)]="config.store.claudeStatus.audio.dynamic.model"
-                                   (ngModelChange)="save()"
-                                   placeholder="claude-haiku-4-5" />
+                            <label class="form-label d-flex align-items-center gap-2">
+                                Model
+                                <button class="btn btn-sm btn-link p-0 text-decoration-none ms-auto"
+                                        type="button"
+                                        [disabled]="modelsLoading"
+                                        title="Re-fetch the model list from /v1/models"
+                                        (click)="refreshModels(true)">
+                                    <i class="fas"
+                                       [class.fa-sync-alt]="!modelsLoading"
+                                       [class.fa-spinner]="modelsLoading"
+                                       [class.cs-spin]="modelsLoading"></i>
+                                </button>
+                            </label>
+                            <select class="form-control"
+                                    [(ngModel)]="config.store.claudeStatus.audio.dynamic.model"
+                                    (ngModelChange)="save()"
+                                    [disabled]="modelsLoading && availableModels.length === 0">
+                                <option *ngIf="modelsLoading && availableModels.length === 0" value="">
+                                    Loading models…
+                                </option>
+                                <option *ngFor="let m of availableModels" [value]="m.id">
+                                    {{m.displayName}}
+                                </option>
+                            </select>
+                            <div *ngIf="modelsError" class="form-text small text-warning">
+                                <i class="fas fa-exclamation-triangle me-1"></i>
+                                {{modelsError}} Showing curated list.
+                            </div>
                         </div>
                         <div class="col-4">
                             <label class="form-label">Max output tokens</label>
@@ -760,14 +921,12 @@ interface BackendOption {
                         [ngModel]="config.store.claudeStatus.audio.backend"
                         (ngModelChange)="onBackendChange($event)"
                     >
-                        <option *ngFor="let b of backends" [value]="b.id">
-                            {{b.label}}
-                            <ng-container *ngIf="b.available === true">&nbsp;✓</ng-container>
-                            <ng-container *ngIf="b.available === false">&nbsp;✗</ng-container>
+                        <option *ngFor="let b of visibleBackends" [value]="b.id">
+                            {{b.label}}<ng-container *ngIf="b.available === true">&nbsp;— available</ng-container><ng-container *ngIf="b.available === false">&nbsp;— not installed</ng-container><ng-container *ngIf="b.available === null">&nbsp;— probing…</ng-container>
                         </option>
                     </select>
                     <div class="form-text">
-                        Web Speech is always available and is the fallback if the selected backend fails.
+                        Picks: <strong>OneCore</strong> for offline neural quality, <strong>Edge TTS</strong> for the broadest neural catalogue (online), <strong>Piper</strong> for fully-local neural. Web Speech (the browser's SAPI bridge) is hidden on Windows — it just exposes the same OneCore voices, so pick OneCore directly. It still acts as the failure fallback if the chosen backend errors at runtime.
                     </div>
                 </div>
 
@@ -778,7 +937,8 @@ interface BackendOption {
                          style="max-width: 700px">
                         <select class="form-control form-control-sm"
                                 style="max-width: 240px"
-                                [(ngModel)]="voiceLanguageFilter">
+                                [ngModel]="voiceLanguageFilter"
+                                (ngModelChange)="onVoiceLanguageFilterChange($event)">
                             <option value="">All languages ({{currentVoices.length}})</option>
                             <option *ngFor="let lang of voiceLanguageOptions" [value]="lang.code">
                                 {{lang.name}} ({{lang.count}})
@@ -801,11 +961,14 @@ interface BackendOption {
                         class="form-control"
                         style="max-width: 700px"
                         [ngModel]="getSelectedVoiceId()"
+                        [compareWith]="compareVoiceIds"
                         (ngModelChange)="onVoiceChange($event)"
                     >
                         <option value="">(default for this backend)</option>
-                        <optgroup *ngFor="let g of filteredAndGroupedVoices" [label]="g.groupLabel">
-                            <option *ngFor="let v of g.voices" [value]="v.id">{{v.label}}</option>
+                        <optgroup *ngFor="let g of filteredAndGroupedVoices; trackBy: trackByGroupLabel"
+                                  [label]="g.groupLabel">
+                            <option *ngFor="let v of g.voices; trackBy: trackByVoiceId"
+                                    [value]="v.id">{{v.label}}</option>
                         </optgroup>
                     </select>
                     <div *ngIf="voicesLoading" class="form-text text-muted">Loading voices…</div>
@@ -837,10 +1000,16 @@ interface BackendOption {
                         </span>
                     </div>
 
-                    <div *ngIf="piperInstalled" class="claude-alert claude-alert-success mb-2">
+                    <div *ngIf="piperStateLoading" class="claude-alert mb-2">
+                        <span class="cs-loading">
+                            <i class="fas fa-spinner cs-spin"></i>
+                            Checking Piper install…
+                        </span>
+                    </div>
+                    <div *ngIf="!piperStateLoading && piperInstalled" class="claude-alert claude-alert-success mb-2">
                         Piper is installed. Click "Reinstall" to re-download the latest <code>piper-tts</code> from PyPI.
                     </div>
-                    <div *ngIf="!piperInstalled && !piperInstalling" class="claude-alert claude-alert-warning mb-2">
+                    <div *ngIf="!piperStateLoading && !piperInstalled && !piperInstalling" class="claude-alert claude-alert-warning mb-2">
                         Piper isn't installed yet. The original C++ binary repo was archived in 2025;
                         the supported successor is
                         <a href="#" (click)="openUrl(piperInstaller.homepageUrl, $event)">OHF-Voice/piper1-gpl</a>,
@@ -1154,13 +1323,17 @@ interface BackendOption {
                 </div>
             </div>
 
-            <!-- Piper voice catalog modal -->
+            <!-- Piper voice catalog modal: top-aligned so filter changes
+                 don't reshuffle the dialog vertically as the row count
+                 shrinks/grows. Centered modals re-centre on every height
+                 change, which makes typing in the filter feel jittery. -->
             <div *ngIf="showPiperVoiceCatalog"
                  style="position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9000;
-                        display: flex; align-items: center; justify-content: center; padding: 2rem;"
+                        display: flex; align-items: flex-start; justify-content: center;
+                        padding: 4rem 2rem 2rem 2rem; overflow-y: auto;"
                  (click)="closePiperVoiceCatalog()">
                 <div style="background: var(--bs-body-bg, #1b1b1b); color: var(--bs-body-color, #ddd);
-                            border-radius: 8px; max-width: 900px; width: 100%; max-height: 80vh;
+                            border-radius: 8px; max-width: 1000px; width: 100%; max-height: calc(100vh - 6rem);
                             overflow: hidden; display: flex; flex-direction: column;
                             box-shadow: 0 10px 40px rgba(0,0,0,0.6);"
                      (click)="$event.stopPropagation()">
@@ -1205,6 +1378,7 @@ interface BackendOption {
                                class="table table-sm" style="width: 100%;">
                             <thead>
                                 <tr>
+                                    <th style="width: 2.5em"></th>
                                     <th>Voice</th>
                                     <th>Language</th>
                                     <th>Quality</th>
@@ -1213,7 +1387,17 @@ interface BackendOption {
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr *ngFor="let entry of filteredPiperCatalog">
+                                <tr *ngFor="let entry of filteredPiperCatalog; trackBy: trackByPiperKey">
+                                    <td class="text-center">
+                                        <button class="btn btn-sm btn-outline-secondary"
+                                                type="button"
+                                                [title]="catalogPreviewKey === entry.key ? 'Stop preview' : 'Preview voice (sample mp3 from Hugging Face)'"
+                                                (click)="togglePiperVoicePreview(entry)">
+                                            <i class="fas"
+                                               [class.fa-play]="catalogPreviewKey !== entry.key"
+                                               [class.fa-stop]="catalogPreviewKey === entry.key"></i>
+                                        </button>
+                                    </td>
                                     <td>
                                         <div><strong>{{entry.name}}</strong></div>
                                         <div class="small text-muted"><code>{{entry.key}}</code></div>
@@ -1297,7 +1481,29 @@ interface BackendOption {
                 </div>
 
                 <div class="row mb-3 ms-3">
-                    <div class="col-12 col-md-8">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">
+                            Delay before <code>cd</code> (seconds)
+                        </label>
+                        <input
+                            type="number"
+                            class="form-control form-control-sm"
+                            style="max-width: 160px"
+                            min="0" max="30" step="0.1"
+                            [(ngModel)]="config.store.claudeStatus.sessionRestore.resumeOpenDelaySec"
+                            (ngModelChange)="save()"
+                        />
+                        <div class="form-text small">
+                            How long to wait after the new tab opens before typing the
+                            <code>cd</code> line. Cold WSL distros and slow shell init
+                            (oh-my-zsh, nvm.lazy, fnm, starship) can drop the
+                            keystrokes if they arrive before the prompt is ready —
+                            the tab then opens at the profile's default cwd with no
+                            <code>cd</code>, no resume. Bump this up if your tab
+                            opens at <code>~/projects</code> instead of the session's cwd.
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6">
                         <label class="form-label">
                             Delay between <code>cd</code> and <code>claude --resume</code> (seconds)
                         </label>
@@ -1337,6 +1543,19 @@ interface BackendOption {
                         {{previousRunSessions.length}} previous run ·
                         {{closedSessions.length}} in history
                     </span>
+                </div>
+
+                <div *ngIf="resumeError" class="claude-alert claude-alert-danger ms-3 mb-2"
+                     style="max-width: 720px">
+                    <div class="d-flex align-items-start gap-2">
+                        <i class="fas fa-exclamation-triangle mt-1"></i>
+                        <div class="small flex-grow-1">{{resumeError}}</div>
+                        <button class="btn btn-sm btn-link p-0" type="button"
+                                title="Dismiss"
+                                (click)="resumeError = ''">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="ms-3 mb-2" style="max-width: 900px">
@@ -1479,10 +1698,48 @@ interface BackendOption {
                                         </div>
                                     </td>
                                     <td class="actions-col text-end">
-                                        <div class="d-flex gap-1 justify-content-end">
-                                            <button class="btn btn-sm btn-outline-success"
-                                                    title="Open a new tab and run claude --resume <id>"
-                                                    (click)="resumeSession(s)">Resume</button>
+                                        <div class="d-flex gap-1 justify-content-end" style="position: relative">
+                                            <div class="btn-group btn-group-sm">
+                                                <button class="btn btn-outline-success"
+                                                        type="button"
+                                                        title="Open a new tab and run claude --resume <id>"
+                                                        (click)="resumeSession(s)">Resume</button>
+                                                <button class="btn btn-outline-success dropdown-toggle dropdown-toggle-split"
+                                                        type="button"
+                                                        title="More resume actions"
+                                                        (click)="toggleResumeDropdown(s, $event)">
+                                                    <span class="caret">▾</span>
+                                                </button>
+                                                <ul class="dropdown-menu dropdown-menu-end show"
+                                                    *ngIf="resumeDropdownOpenFor === s.sessionId"
+                                                    style="position: absolute; right: 0; top: 100%; z-index: 100; min-width: 220px;">
+                                                    <li>
+                                                        <a class="dropdown-item" href="#"
+                                                           (click)="copyResumeCommand(s, 'resume'); $event.preventDefault()">
+                                                            <i class="fas fa-copy me-2"></i>Copy resume command
+                                                        </a>
+                                                    </li>
+                                                    <li>
+                                                        <a class="dropdown-item" href="#"
+                                                           (click)="copyResumeCommand(s, 'fork'); $event.preventDefault()">
+                                                            <i class="fas fa-code-branch me-2"></i>Copy fork command
+                                                        </a>
+                                                    </li>
+                                                    <li><hr class="dropdown-divider" /></li>
+                                                    <li>
+                                                        <a class="dropdown-item" href="#"
+                                                           (click)="copyToClipboard(s.sessionId, 'sid-' + s.sessionId); resumeDropdownOpenFor = ''; $event.preventDefault()">
+                                                            <i class="fas fa-fingerprint me-2"></i>Copy session ID
+                                                        </a>
+                                                    </li>
+                                                    <li>
+                                                        <a class="dropdown-item" href="#"
+                                                           (click)="copyToClipboard(s.cwd, 'cwd-' + s.sessionId); resumeDropdownOpenFor = ''; $event.preventDefault()">
+                                                            <i class="fas fa-folder me-2"></i>Copy path
+                                                        </a>
+                                                    </li>
+                                                </ul>
+                                            </div>
                                             <button class="btn btn-sm btn-outline-danger"
                                                     (click)="forgetSession(s)">✕</button>
                                         </div>
@@ -1529,26 +1786,51 @@ interface BackendOption {
                             </div>
                         </div>
 
-                        <div *ngIf="filteredClosedSessions.length > 0"
+                        <div *ngIf="filteredClosedSessions.length > 0" class="d-flex align-items-center gap-1 mb-2">
+                            <span class="small text-muted me-1">Layout:</span>
+                            <div class="btn-group btn-group-sm" role="group" aria-label="History layout">
+                                <button type="button"
+                                        class="btn btn-outline-secondary"
+                                        [class.active]="historyMode === 'grouped'"
+                                        (click)="setHistoryMode('grouped')">
+                                    <i class="fas fa-folder me-1"></i> Grouped
+                                </button>
+                                <button type="button"
+                                        class="btn btn-outline-secondary"
+                                        [class.active]="historyMode === 'flat'"
+                                        (click)="setHistoryMode('flat')">
+                                    <i class="fas fa-list me-1"></i> Flat
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Grouped layout: accordion of cwds. Default —
+                             scales nicely when one project has dozens of
+                             sessions, since the header is the project. -->
+                        <div *ngIf="filteredClosedSessions.length > 0 && historyMode === 'grouped'"
                              style="max-height: 720px; overflow-y: auto; border: 1px solid var(--bs-border-color, #333); border-radius: 4px;">
-                            <div *ngFor="let group of groupedClosedSessions"
+                            <div *ngFor="let group of groupedClosedSessions; trackBy: trackByCwd"
                                  class="history-group">
                                 <button type="button"
                                         class="history-group-header"
                                         (click)="toggleClosedGroup(group.cwd)">
-                                    <i class="fas me-1"
-                                       [class.fa-chevron-down]="isClosedGroupExpanded(group.cwd)"
-                                       [class.fa-chevron-right]="!isClosedGroupExpanded(group.cwd)"></i>
-                                    <i class="fas fa-folder me-1 text-muted"></i>
-                                    <strong>{{group.basename}}</strong>
-                                    <code class="small text-muted ms-2">{{group.cwd}}</code>
-                                    <span class="text-muted ms-2 small">
-                                        ({{group.sessions.length}})
-                                    </span>
-                                    <span class="text-muted ms-2 small ms-auto"
-                                          [attr.title]="formatTs(group.lastSeen)">
-                                        {{timeAgo(group.lastSeen)}}
-                                    </span>
+                                    <div class="d-flex align-items-center gap-2 w-100">
+                                        <i class="fas"
+                                           [class.fa-chevron-down]="isClosedGroupExpanded(group.cwd)"
+                                           [class.fa-chevron-right]="!isClosedGroupExpanded(group.cwd)"></i>
+                                        <i class="fas fa-folder text-muted"></i>
+                                        <strong>{{group.basename}}</strong>
+                                        <span class="text-muted small">
+                                            ({{group.sessions.length}})
+                                        </span>
+                                        <span class="text-muted small ms-auto"
+                                              [attr.title]="formatTs(group.lastSeen)">
+                                            {{timeAgo(group.lastSeen)}}
+                                        </span>
+                                    </div>
+                                    <div class="history-group-path text-muted small">
+                                        <code>{{group.cwd}}</code>
+                                    </div>
                                 </button>
                                 <table *ngIf="isClosedGroupExpanded(group.cwd)"
                                        class="table table-sm mb-0 session-table">
@@ -1589,6 +1871,98 @@ interface BackendOption {
                                 </table>
                             </div>
                         </div>
+
+                        <!-- Flat layout: chronological list of every
+                             closed session, newest first. Useful when
+                             you remember roughly when you used a session
+                             but not which folder it was in. -->
+                        <table *ngIf="filteredClosedSessions.length > 0 && historyMode === 'flat'"
+                               class="table table-sm session-table"
+                               style="max-width: 900px; max-height: 720px; overflow-y: auto; display: block;">
+                            <tbody>
+                                <tr *ngFor="let s of filteredClosedSessions; trackBy: trackBySessionId">
+                                    <td>
+                                        <div class="copyable-row">
+                                            <code class="small">{{s.cwd}}</code>
+                                            <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
+                                                    type="button"
+                                                    title="Copy path"
+                                                    (click)="copyToClipboard(s.cwd, 'cwd-' + s.sessionId)">
+                                                <i class="fas"
+                                                   [class.fa-copy]="copiedKey !== 'cwd-' + s.sessionId"
+                                                   [class.fa-check]="copiedKey === 'cwd-' + s.sessionId"></i>
+                                            </button>
+                                        </div>
+                                        <div class="copyable-row small text-muted">
+                                            <code>{{s.sessionId}}</code>
+                                            <button class="btn btn-sm btn-link copy-btn p-0 ms-1"
+                                                    type="button"
+                                                    title="Copy session id"
+                                                    (click)="copyToClipboard(s.sessionId, 'sid-' + s.sessionId)">
+                                                <i class="fas"
+                                                   [class.fa-copy]="copiedKey !== 'sid-' + s.sessionId"
+                                                   [class.fa-check]="copiedKey === 'sid-' + s.sessionId"></i>
+                                            </button>
+                                        </div>
+                                        <div *ngIf="displayTitle(s)" class="small text-muted fst-italic">{{displayTitle(s)}}</div>
+                                        <div *ngIf="displayProfileName(s)" class="small text-muted">
+                                            <i class="fas fa-terminal me-1"></i>{{displayProfileName(s)}}
+                                        </div>
+                                    </td>
+                                    <td class="actions-col text-end">
+                                        <div class="d-flex gap-1 justify-content-end" style="position: relative">
+                                            <div class="btn-group btn-group-sm">
+                                                <button class="btn btn-outline-success"
+                                                        type="button"
+                                                        title="Open a new tab and run claude --resume <id>"
+                                                        (click)="resumeSession(s)">Resume</button>
+                                                <button class="btn btn-outline-success dropdown-toggle dropdown-toggle-split"
+                                                        type="button"
+                                                        title="More resume actions"
+                                                        (click)="toggleResumeDropdown(s, $event)">
+                                                    <span class="caret">▾</span>
+                                                </button>
+                                                <ul class="dropdown-menu dropdown-menu-end show"
+                                                    *ngIf="resumeDropdownOpenFor === s.sessionId"
+                                                    style="position: absolute; right: 0; top: 100%; z-index: 100; min-width: 220px;">
+                                                    <li>
+                                                        <a class="dropdown-item" href="#"
+                                                           (click)="copyResumeCommand(s, 'resume'); $event.preventDefault()">
+                                                            <i class="fas fa-copy me-2"></i>Copy resume command
+                                                        </a>
+                                                    </li>
+                                                    <li>
+                                                        <a class="dropdown-item" href="#"
+                                                           (click)="copyResumeCommand(s, 'fork'); $event.preventDefault()">
+                                                            <i class="fas fa-code-branch me-2"></i>Copy fork command
+                                                        </a>
+                                                    </li>
+                                                    <li><hr class="dropdown-divider" /></li>
+                                                    <li>
+                                                        <a class="dropdown-item" href="#"
+                                                           (click)="copyToClipboard(s.sessionId, 'sid-' + s.sessionId); resumeDropdownOpenFor = ''; $event.preventDefault()">
+                                                            <i class="fas fa-fingerprint me-2"></i>Copy session ID
+                                                        </a>
+                                                    </li>
+                                                    <li>
+                                                        <a class="dropdown-item" href="#"
+                                                           (click)="copyToClipboard(s.cwd, 'cwd-' + s.sessionId); resumeDropdownOpenFor = ''; $event.preventDefault()">
+                                                            <i class="fas fa-folder me-2"></i>Copy path
+                                                        </a>
+                                                    </li>
+                                                </ul>
+                                            </div>
+                                            <button class="btn btn-sm btn-outline-danger"
+                                                    (click)="forgetSession(s)">✕</button>
+                                        </div>
+                                        <div class="small text-muted mt-1"
+                                             [attr.title]="formatTs(s.lastSeen)">
+                                            {{timeAgo(s.lastSeen)}}
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
                         <div *ngIf="closedSessions.length === 0" class="text-muted small">
                             No sessions in history yet.
                         </div>
@@ -1678,59 +2052,29 @@ interface BackendOption {
                 </div>
             </div>
 
+            <!-- Top action row: aggregate status + Re-check (operates on
+                 every detected location). -->
             <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
-                <div class="btn-group" (click)="$event.stopPropagation()">
-                    <button class="btn btn-primary"
-                            [disabled]="setupRunning"
-                            (click)="setupHooks({ target: 'windows' })">
-                        Setup Claude Hooks (Windows)
-                    </button>
-                    <button class="btn btn-primary"
-                            type="button"
-                            style="padding-left: 0.6rem; padding-right: 0.6rem;"
-                            [disabled]="setupRunning"
-                            (click)="setupDropdownOpen = !setupDropdownOpen">
-                        <span class="caret">▾</span>
-                    </button>
-                    <ul class="dropdown-menu show" *ngIf="setupDropdownOpen"
-                        style="position: absolute; top: 100%; left: 0; z-index: 100;">
-                        <li>
-                            <a class="dropdown-item" href="#"
-                               (click)="onSetupChoice($event, { target: 'windows' })">
-                                Windows <code class="small">~/.claude/settings.json</code>
-                            </a>
-                        </li>
-                        <li *ngIf="wslDistros.length === 0" class="px-3 py-1 small text-muted">
-                            No WSL distros detected
-                        </li>
-                        <li *ngFor="let distro of wslDistros">
-                            <a class="dropdown-item" href="#"
-                               (click)="onSetupChoice($event, { target: 'wsl', distro: distro })">
-                                WSL {{distro}}
-                            </a>
-                        </li>
-                        <li *ngIf="wslDistros.length > 0"><hr class="dropdown-divider" /></li>
-                        <li *ngIf="wslDistros.length > 0">
-                            <a class="dropdown-item" href="#"
-                               (click)="onSetupChoice($event, { target: 'all' })">
-                                <strong>All locations (Windows + every WSL distro)</strong>
-                            </a>
-                        </li>
-                    </ul>
-                </div>
-                <button class="btn btn-sm btn-outline-secondary" (click)="checkHooks()">
-                    Re-check
+                <button class="btn btn-sm btn-outline-secondary" (click)="checkHooks()"
+                        [disabled]="hooksLoading"
+                        title="Re-scan every detected ~/.claude/settings.json">
+                    <i class="fas fa-sync-alt me-1"></i> Re-check
                 </button>
-                <button class="btn btn-sm btn-outline-danger"
-                        [disabled]="setupRunning || hooksStatus === 'missing'"
-                        (click)="removeHooks({ target: 'all' })"
-                        title="Remove tabby-claude-status entries from every detected ~/.claude/settings.json (Windows + WSL).">
-                    Uninstall hooks
-                </button>
-                <span *ngIf="hooksStatus === 'ok'" class="text-success">All locations configured</span>
-                <span *ngIf="hooksStatus === 'partial'" class="text-warning">Partially configured</span>
-                <span *ngIf="hooksStatus === 'missing'" class="text-danger">Hooks not configured</span>
-                <span *ngIf="hooksStatus === 'error'" class="text-warning">Could not check hooks</span>
+                <span *ngIf="hooksLoading" class="cs-loading">
+                    <i class="fas fa-spinner cs-spin"></i> Scanning hook locations…
+                </span>
+                <span *ngIf="!hooksLoading && hooksStatus === 'ok'" class="text-success">
+                    <i class="fas fa-check-circle me-1"></i>All locations configured
+                </span>
+                <span *ngIf="!hooksLoading && hooksStatus === 'partial'" class="text-warning">
+                    <i class="fas fa-exclamation-triangle me-1"></i>Partially configured
+                </span>
+                <span *ngIf="!hooksLoading && hooksStatus === 'missing'" class="text-danger">
+                    <i class="fas fa-times-circle me-1"></i>Hooks not configured
+                </span>
+                <span *ngIf="!hooksLoading && hooksStatus === 'error'" class="text-warning">
+                    <i class="fas fa-exclamation-triangle me-1"></i>Could not check hooks
+                </span>
                 <span *ngIf="setupResult" class="small"
                       [class.text-success]="setupResult.kind === 'ok'"
                       [class.text-danger]="setupResult.kind === 'error'">
@@ -1738,43 +2082,115 @@ interface BackendOption {
                 </span>
             </div>
 
-            <table *ngIf="hookLocations.length > 0"
-                   class="table table-sm mb-3" style="max-width: 900px">
-                <thead>
-                    <tr>
-                        <th style="width: 160px">Location</th>
-                        <th style="width: 90px">Status</th>
-                        <th>settings.json</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr *ngFor="let loc of hookLocations"
-                        [attr.title]="loc.state === 'partial' ? ('Missing events: ' + loc.missingEvents.join(', ')) : null">
-                        <td>{{loc.label}}</td>
-                        <td>
-                            <span *ngIf="loc.state === 'ok'" class="badge text-bg-success">
-                                {{loc.configuredEvents}}/{{loc.totalEvents}} ok
-                            </span>
-                            <span *ngIf="loc.state === 'partial'" class="badge text-bg-warning">
-                                {{loc.configuredEvents}}/{{loc.totalEvents}}
-                            </span>
-                            <span *ngIf="loc.state === 'missing'" class="badge text-bg-danger">
-                                0/{{loc.totalEvents}}
-                            </span>
-                            <span *ngIf="loc.state === 'no-file'" class="badge text-bg-secondary">
-                                no file
-                            </span>
-                            <span *ngIf="loc.state === 'error'" class="badge text-bg-warning">
-                                error
-                            </span>
-                        </td>
-                        <td>
-                            <code class="small">{{loc.path}}</code>
-                            <div *ngIf="loc.error" class="small text-muted">{{loc.error}}</div>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
+            <!-- Skeleton tabs while the hook scan is in flight. -->
+            <ul *ngIf="hooksLoading && hookLocations.length === 0"
+                class="hook-location-tabs">
+                <li *ngFor="let _ of [0, 1, 2]">
+                    <span class="nav-link disabled cs-skeleton" style="min-width: 8em; height: 2em">tab</span>
+                </li>
+            </ul>
+
+            <!-- Per-location tabs. Each detected ~/.claude/settings.json
+                 (Windows + each WSL distro) gets its own tab; the body
+                 below shows just that location's per-event status and
+                 owns its own Setup / Uninstall buttons. Avoids the
+                 ambiguity the global "Re-check / Uninstall hooks" + table
+                 layout had — those used to look like they applied to
+                 whichever location the user was looking at. -->
+            <ul *ngIf="hookLocations.length > 0" class="hook-location-tabs">
+                <li *ngFor="let loc of hookLocations">
+                    <a class="nav-link"
+                       [class.active]="activeHookLocation === loc.label"
+                       (click)="activeHookLocation = loc.label">
+                        <i *ngIf="loc.isLoading" class="fas fa-circle-notch cs-spin hook-location-icon text-muted"></i>
+                        <i *ngIf="!loc.isLoading" class="fas hook-location-icon"
+                           [class.fa-check-circle]="loc.state === 'ok'"
+                           [class.text-success]="loc.state === 'ok'"
+                           [class.fa-exclamation-triangle]="loc.state === 'partial' || loc.state === 'error'"
+                           [class.text-warning]="loc.state === 'partial' || loc.state === 'error'"
+                           [class.fa-times-circle]="loc.state === 'missing'"
+                           [class.text-danger]="loc.state === 'missing'"
+                           [class.fa-file]="loc.state === 'no-file'"
+                           [class.text-muted]="loc.state === 'no-file'"></i>
+                        <span>{{loc.label}}</span>
+                        <span class="hook-location-badge"
+                              [class.text-bg-secondary]="loc.isLoading || loc.state === 'no-file'"
+                              [class.text-bg-success]="!loc.isLoading && loc.state === 'ok'"
+                              [class.text-bg-warning]="!loc.isLoading && (loc.state === 'partial' || loc.state === 'error')"
+                              [class.text-bg-danger]="!loc.isLoading && loc.state === 'missing'">
+                            <span *ngIf="loc.isLoading">…</span>
+                            <span *ngIf="!loc.isLoading && loc.state === 'no-file'">no file</span>
+                            <span *ngIf="!loc.isLoading && loc.state !== 'no-file'">{{loc.configuredEvents}}/{{loc.totalEvents}}</span>
+                        </span>
+                    </a>
+                </li>
+            </ul>
+
+            <!-- Active-tab body: status, path, per-event checklist, and
+                 location-scoped Setup / Uninstall buttons. -->
+            <div *ngIf="currentHookLocation as loc" class="card mb-3" style="max-width: 900px">
+                <div class="card-body py-3">
+                    <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+                        <span *ngIf="loc.state === 'ok'" class="badge text-bg-success">
+                            All {{loc.totalEvents}} events configured
+                        </span>
+                        <span *ngIf="loc.state === 'partial'" class="badge text-bg-warning">
+                            {{loc.configuredEvents}}/{{loc.totalEvents}} configured
+                        </span>
+                        <span *ngIf="loc.state === 'missing'" class="badge text-bg-danger">
+                            Not configured
+                        </span>
+                        <span *ngIf="loc.state === 'no-file'" class="badge text-bg-secondary">
+                            settings.json doesn't exist yet
+                        </span>
+                        <span *ngIf="loc.state === 'error'" class="badge text-bg-warning">
+                            error reading
+                        </span>
+                        <button class="btn btn-sm btn-primary ms-auto"
+                                [disabled]="setupRunning"
+                                (click)="setupHooksForLocation(loc)">
+                            <i class="fas fa-cog me-1"></i>
+                            <span *ngIf="loc.state === 'ok'">Reinstall hooks</span>
+                            <span *ngIf="loc.state !== 'ok'">Setup hooks</span>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger"
+                                [disabled]="setupRunning || loc.state === 'missing' || loc.state === 'no-file'"
+                                (click)="removeHooksFromLocation(loc)"
+                                title="Remove tabby-claude-status entries from this settings.json only.">
+                            <i class="fas fa-trash-alt me-1"></i>
+                            Uninstall
+                        </button>
+                    </div>
+
+                    <div class="small text-muted mb-2" style="word-break: break-all">
+                        <code>{{loc.path}}</code>
+                    </div>
+
+                    <div *ngIf="loc.error" class="claude-alert claude-alert-danger small mb-2">
+                        {{loc.error}}
+                    </div>
+
+                    <div *ngIf="loc.state !== 'error'">
+                        <div class="small text-muted mb-1">Hook events:</div>
+                        <ul class="list-unstyled small mb-0 hook-event-list">
+                            <li *ngFor="let h of hookEventDescriptions"
+                                [attr.title]="h.purpose">
+                                <i *ngIf="!loc.missingEvents.includes(h.event)"
+                                   class="fas fa-check-circle text-success me-1"></i>
+                                <i *ngIf="loc.missingEvents.includes(h.event)"
+                                   class="far fa-circle text-muted me-1"></i>
+                                <code>{{h.event}}</code>
+                                <span *ngIf="h.statusLabel"
+                                      class="badge ms-1"
+                                      [style.background-color]="h.statusColor + ' !important'"
+                                      [style.color]="'#fff !important'">
+                                    {{h.statusLabel}}
+                                </span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
 
             <!-- Recent activity ─────────────────────────────────────── -->
             <h5 class="mt-4 mb-2 d-flex align-items-center gap-2">
@@ -1919,10 +2335,14 @@ interface BackendOption {
                     <tr>
                         <td class="text-muted">Node.js</td>
                         <td>
-                            <span *ngIf="nodeInfo.path" class="text-success">
+                            <span *ngIf="nodeInfoLoading" class="cs-loading">
+                                <i class="fas fa-spinner cs-spin"></i>
+                                Detecting…
+                            </span>
+                            <span *ngIf="!nodeInfoLoading && nodeInfo.path" class="text-success">
                                 {{nodeInfo.version}} &mdash; <code>{{nodeInfo.path}}</code>
                             </span>
-                            <span *ngIf="!nodeInfo.path" class="text-danger">
+                            <span *ngIf="!nodeInfoLoading && !nodeInfo.path" class="text-danger">
                                 Not found on PATH
                             </span>
                         </td>
@@ -1945,7 +2365,7 @@ interface BackendOption {
                 </tbody>
             </table>
 
-            <div *ngIf="!nodeInfo.path" class="claude-alert claude-alert-warning mt-2" style="max-width: 600px">
+            <div *ngIf="!nodeInfoLoading && !nodeInfo.path" class="claude-alert claude-alert-warning mt-2" style="max-width: 600px">
                 <strong>Node.js not detected on Tabby's PATH.</strong>
                 If you use nvm or fnm, Tabby launched from a desktop shortcut may not
                 inherit your shell's PATH. Hooks will still work because Claude Code
@@ -1955,18 +2375,52 @@ interface BackendOption {
         </div>
     `,
 })
-export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
+export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCheck {
     colorStatuses = ['working', 'question', 'done', 'error'] as const
     phraseStatuses = ['done', 'question', 'error', 'working', 'idle'] as const
     emojiStatuses = ['working', 'question', 'done', 'error', 'idle'] as const
     hooksStatus: 'ok' | 'partial' | 'missing' | 'error' | '' = ''
     hookLocations: HookLocationStatus[] = []
+    /** Label of the location whose detail panel is shown under the Hooks
+     *  sub-tabs. Synced to the first location after `checkHooks()` runs;
+     *  preserved across re-checks if the previously-selected label is
+     *  still present. Empty string = nothing selected (initial / no
+     *  locations detected). */
+    activeHookLocation = ''
+    // Loading flags so the panel paints the skeleton state immediately
+    // while the heavy I/O (wsl.exe, where node, UNC reads) runs in the
+    // background. Initialised to true on Windows for the WSL-dependent
+    // pieces; ngOnInit kicks them off and flips to false on completion.
+    nodeInfoLoading = false
+    wslDistrosLoading = false
+    hooksLoading = false
+    credStatusLoading = false
+    piperStateLoading = false
+    /** Memoised result of `wsl.exe -l -q` so checkHooks() and the setup
+     *  dropdown share a single shell-out per Tabby session. */
+    private wslDistrosCache: string[] | null = null
 
     backends: BackendOption[] = []
     voicesLoading = false
-    voiceLanguageFilter = 'en'
+    voiceLanguageFilter = ''
     voiceTextFilter = ''
     filteredVoiceCount = 0
+    /**
+     * Last (backend.id, savedVoiceId, currentVoices.length) tuple we
+     * synced the language filter against. ngDoCheck compares the live
+     * value against this on every CD pass and re-runs
+     * `syncFilterToSelection` whenever any of them changed — without it
+     * the filter and voice select would freeze on whatever we computed at
+     * first paint, even after the user switched backends or voices loaded
+     * asynchronously.
+     */
+    private lastVoiceSyncKey = ''
+    /**
+     * True once the user has manually changed `voiceLanguageFilter` from
+     * its auto-synced value. We then stop overriding their choice — they
+     * can pick "All languages" intentionally and not have us reset it.
+     */
+    private voiceLanguageFilterTouched = false
 
     // Sound-mode state. The grouped list is recomputed each time the user
     // opens the audio tab, after a download from the catalog completes, and
@@ -1996,6 +2450,11 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     piperDownloadStatus = ''
     piperInstalledKeys: Set<string> = new Set()
     piperModelsDir = ''
+    /** Key of the catalog row whose Hugging Face sample is currently
+     *  playing. Empty string = nothing playing. The Preview button
+     *  toggles between play and stop using this. */
+    catalogPreviewKey = ''
+    private catalogPreviewAudio: HTMLAudioElement | null = null
     private languageDisplayNames: Intl.DisplayNames | null = (() => {
         try { return new Intl.DisplayNames(['en'], { type: 'language' }) } catch { return null }
     })()
@@ -2010,6 +2469,11 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         return m ? `${m[1]}/${m[2]}` : url
     })()
     sessions: ClaudeSessionRecord[] = []
+    /** Banner shown next to the session list when Resume / Fork fails so
+     *  the user gets feedback even when Tabby's NotificationsService
+     *  isn't injected. Auto-clears after a few seconds. */
+    resumeError = ''
+    private resumeErrorTimer: ReturnType<typeof setTimeout> | null = null
 
     nodeInfo: { path: string | null; version: string | null; error: string | null } = {
         path: null, version: null, error: null,
@@ -2034,6 +2498,14 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     dynamicTestResult: { status: 'done' | 'question'; kind: 'ok' | 'error'; message: string } | null = null
     credStatus: CredentialsStatus | null = null
 
+    /** Populated by `refreshModels()` from the Anthropic /v1/models API.
+     *  Falls back to a curated list if auth is missing or the call fails. */
+    availableModels: ClaudeModelOption[] = []
+    modelsLoading = false
+    /** Reason for the last models fetch failure, if any — surfaces under
+     *  the dropdown so users know "this list is curated, not live". */
+    modelsError: string | null = null
+
     activityEntries: ActivityLogEntry[] = []
     activityFilter: '' | 'working' | 'question' | 'done' | 'error' | 'idle' = ''
     activityTextFilter = ''
@@ -2046,6 +2518,20 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     sessionFilter = ''
     /** cwds whose history group is expanded; collapsed by default to keep the list scannable. */
     expandedClosedGroups: Set<string> = new Set()
+    /**
+     * History rendering mode:
+     *   - 'grouped' — accordion of groups by cwd (default; helps when
+     *     a single project has dozens of sessions).
+     *   - 'flat'    — single chronological list of every closed session.
+     * Persisted to localStorage so the user's preference survives
+     * Tabby restarts without bloating the central config.yaml.
+     */
+    historyMode: 'grouped' | 'flat' = (() => {
+        try {
+            const v = localStorage.getItem('tabby-claude-status.historyMode')
+            return v === 'flat' ? 'flat' : 'grouped'
+        } catch { return 'grouped' }
+    })()
     copiedKey = ''
     setupDropdownOpen = false
     setupRunning = false
@@ -2129,10 +2615,13 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     private setupResultTimer: ReturnType<typeof setTimeout> | null = null
     private refreshTicker: ReturnType<typeof setInterval> | null = null
     private docClickListener = (ev: MouseEvent) => {
-        if (!this.setupDropdownOpen) return
         const target = ev.target as HTMLElement | null
-        if (!target?.closest?.('.btn-group')) {
+        const insideBtnGroup = !!target?.closest?.('.btn-group')
+        if (this.setupDropdownOpen && !insideBtnGroup) {
             this.setupDropdownOpen = false
+        }
+        if (this.resumeDropdownOpenFor && !insideBtnGroup) {
+            this.resumeDropdownOpenFor = ''
         }
     }
 
@@ -2215,9 +2704,17 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
             this.config.store.claudeStatus.sessionRestore.resumeCdDelaySec =
                 DEFAULT_SESSION_RESTORE_CONFIG.resumeCdDelaySec
         }
+        if (this.config.store.claudeStatus.sessionRestore.resumeOpenDelaySec == null) {
+            this.config.store.claudeStatus.sessionRestore.resumeOpenDelaySec =
+                DEFAULT_SESSION_RESTORE_CONFIG.resumeOpenDelaySec
+        }
+        // ── Cheap synchronous work only ───────────────────────────────
+        // Anything that touches the disk / spawns a process MUST be
+        // deferred — otherwise it blocks the first paint and the panel
+        // renders blank for seconds (cold WSL was the worst offender).
+
         this.refreshSessions()
 
-        // Seed backend list (availability + voice probes are kicked off async)
         this.backends = this.audioService.listAllBackends().map(b => ({
             id: b.id,
             label: b.label,
@@ -2226,7 +2723,6 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         }))
         for (const entry of this.backends) this.probeBackend(entry)
 
-        // Handle Web Speech's late-loading voice list
         if (typeof window !== 'undefined' && window.speechSynthesis) {
             window.speechSynthesis.onvoiceschanged = () => {
                 const ws = this.backends.find(b => b.id === 'webspeech')
@@ -2234,42 +2730,52 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
             }
         }
 
-        // Detect environment
         this.hookJsPath = this.getHookJsPath()
         this.hookJsExists = fs.existsSync(this.hookJsPath)
-        this.nodeInfo = this.detectNodePath()
-
-        this.wslDistros = process.platform === 'win32' ? this.getWslDistros() : []
-        this.checkHooks()
-        this.refreshPiperState()
         document.addEventListener('click', this.docClickListener, true)
 
-        // Keep the sessions table fresh while the settings tab is open so
-        // sessions that get closed elsewhere (tab-close in another Tabby
-        // window, SessionEnd hook, etc.) move to history without needing a
-        // manual refresh. 5s is plenty — this is cheap (single JSON read).
         this.refreshTicker = setInterval(() => {
             this.refreshSessions()
         }, 5000)
 
-        // Pre-populate the sound library so the per-status dropdowns are
-        // ready as soon as the user lands on the audio tab in sound mode.
-        // Cheap: bundled is in-memory, cached + Windows are one readdir each.
         if (this.config.store.claudeStatus.audio?.mode === 'sound') {
             this.refreshSoundLibrary()
         }
 
-        // Activity log: live-refresh while the settings tab is open so new
-        // events appear without a manual reload. Subscription is cheap (the
-        // service notifies in-process; no IO).
         this.activityLogPath = this.activityLog.filePath
         this.refreshActivityLog()
         this.activityUnsubscribe = this.activityLog.subscribe(() => this.refreshActivityLog())
 
-        this.refreshCredStatus()
+        // Light up loading skeletons immediately for everything we're about
+        // to fetch off the main path.
+        this.nodeInfoLoading = true
+        this.wslDistrosLoading = process.platform === 'win32'
+        this.hooksLoading = true
+        this.credStatusLoading = true
+        this.piperStateLoading = true
+
+        // ── Deferred heavy I/O ────────────────────────────────────────
+        // setTimeout(0) yields to the browser so Angular's first change
+        // detection / paint runs before any of this fires. Each of these
+        // is independently async + flips its own loading flag, so slow
+        // probes don't block fast ones.
+        setTimeout(() => {
+            this.refreshNodeInfo()
+            this.refreshCredStatusInternal()
+            this.refreshPiperState()
+            this.refreshModels()
+            // checkHooks needs the WSL distro list, so chain it after
+            // refreshWslDistros — but checkHooks() also flips wslDistros
+            // visibility itself if checkHooks happens to run first.
+            this.refreshWslDistros().then(() => this.checkHooks())
+        }, 0)
     }
 
     refreshPiperState(): void {
+        this.piperStateLoading = true
+        // existsSync is fast (3 calls), but keep the flag set briefly so
+        // the audio tab shows a "checking…" state on first paint instead
+        // of "Piper isn't installed yet" before we've actually checked.
         this.piperInstalled = this.piperInstaller.isInstalled()
         this.piperInstaller
             .detectInstallers()
@@ -2278,6 +2784,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
             })
             .catch(() => {
                 this.piperDetectedInstallers = []
+            })
+            .finally(() => {
+                this.piperStateLoading = false
             })
     }
 
@@ -2316,6 +2825,18 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     }
 
     private async probeBackend(entry: BackendOption): Promise<void> {
+        // Piper's isAvailable() reads the backend's internal exePath/
+        // modelPath fields. Those only get populated by audioService's
+        // speakText() pipeline, so on the first probe (panel just opened,
+        // user hasn't hit Test or fired a hook yet) both fields are
+        // empty and isAvailable returns false — making the dropdown say
+        // "Piper — not installed" while the alert below says "Piper is
+        // installed" because the installer service checks the on-disk
+        // paths directly. Push the user's saved paths in before we
+        // probe so both sides agree.
+        if (entry.id === 'piper') {
+            this.audioService.configurePiperFromConfig()
+        }
         const backend = this.audioService.getBackend(entry.id)
         try {
             entry.available = await backend.isAvailable()
@@ -2336,13 +2857,17 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     }
 
     /**
-     * Default the language filter to the family of whatever voice is already
-     * configured for the current backend. Falls back to 'en' if nothing is
-     * selected yet but English voices exist; otherwise clears the filter so
-     * the user can see everything.
+     * Sync the language-filter dropdown to the saved voice for the current
+     * backend. Bails if the user has manually picked a filter
+     * (`voiceLanguageFilterTouched` — they want to see everything or a
+     * different language) or is mid-typing in the text filter.
+     *
+     * Falls back to 'en' if no saved voice but English voices exist;
+     * '' otherwise so the dropdown shows "All languages".
      */
     private syncFilterToSelection(): void {
-        if (this.voiceTextFilter) return // user is actively filtering by text
+        if (this.voiceTextFilter) return
+        if (this.voiceLanguageFilterTouched) return
         const selectedId = this.getSelectedVoiceId()
         if (selectedId) {
             const current = this.currentVoices.find(v => v.id === selectedId)
@@ -2353,6 +2878,39 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         }
         const hasEnglish = this.currentVoices.some(v => this.languageFamilyOf(v.locale) === 'en')
         this.voiceLanguageFilter = hasEnglish ? 'en' : ''
+    }
+
+    /**
+     * Re-run `syncFilterToSelection` whenever the dependencies that feed
+     * it change — backend id, saved voice id for the active backend, or
+     * the loaded voice count. Without this the filter freezes after the
+     * first probe and the user sees "All languages" + "(default for this
+     * backend)" even though they have a voice saved for the active
+     * backend.
+     */
+    ngDoCheck(): void {
+        const backend = this.currentBackend
+        const audio = this.config.store.claudeStatus?.audio
+        const savedVoice = audio?.voicesByBackend?.[backend?.id as TtsBackendId] || ''
+        const voiceCount = backend?.voices?.length ?? 0
+        const key = `${backend?.id || ''}|${savedVoice}|${voiceCount}`
+        if (key !== this.lastVoiceSyncKey) {
+            this.lastVoiceSyncKey = key
+            this.syncFilterToSelection()
+        }
+    }
+
+    /** Wired to the language filter <select>'s (ngModelChange). Marks the
+     *  filter as user-touched so ngDoCheck stops auto-overriding it. */
+    onVoiceLanguageFilterChange(value: string): void {
+        this.voiceLanguageFilter = value
+        this.voiceLanguageFilterTouched = true
+    }
+
+    clearVoiceFilters(): void {
+        this.voiceLanguageFilter = ''
+        this.voiceTextFilter = ''
+        this.voiceLanguageFilterTouched = false
     }
 
     get currentBackend(): BackendOption | undefined {
@@ -2437,11 +2995,6 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         return result
     }
 
-    clearVoiceFilters(): void {
-        this.voiceLanguageFilter = ''
-        this.voiceTextFilter = ''
-    }
-
     private languageFamilyOf(locale: string | undefined): string {
         if (!locale) return 'unknown'
         return locale.split(/[-_]/)[0].toLowerCase()
@@ -2508,6 +3061,51 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         return stored
     }
 
+    /**
+     * `[compareWith]` for the voice <select>. Strings only — but we
+     * normalise both sides so a small whitespace or case difference in
+     * the saved path doesn't lose the match. Without this, switching
+     * backends or re-rendering the option list mid-CD-cycle could leave
+     * the select stuck on "(default for this backend)" even though the
+     * saved voice id is in the option list.
+     */
+    compareVoiceIds = (a: string | null | undefined, b: string | null | undefined): boolean => {
+        if (a === b) return true
+        if (a == null || b == null) return false
+        // Path-style ids (Piper) — normalise separators + case (Windows
+        // FS is case-insensitive). For non-path ids (Edge, OneCore, Web
+        // Speech) the normalisation is a no-op and we still get exact
+        // string equality.
+        const norm = (s: string) => s.replace(/\\/g, '/').toLowerCase()
+        return norm(a) === norm(b)
+    }
+
+    trackByGroupLabel(_index: number, group: { groupLabel: string }): string {
+        return group.groupLabel
+    }
+
+    trackByVoiceId(_index: number, voice: TtsVoice): string {
+        return voice.id
+    }
+
+    /**
+     * Backends shown in the dropdown. On Windows we hide the Web Speech
+     * entry because Chromium's `speechSynthesis.getVoices()` enumerates
+     * the same OneCore voices that the dedicated WinRT backend exposes
+     * — listing both makes it look like two different things when it's
+     * one underlying voice catalog. Web Speech remains the internal
+     * failure-fallback in `audioService.speakText`; just not user-pickable.
+     */
+    get visibleBackends(): BackendOption[] {
+        if (process.platform === 'win32') {
+            const winrt = this.backends.find(b => b.id === 'winrt')
+            if (winrt && winrt.available !== false) {
+                return this.backends.filter(b => b.id !== 'webspeech')
+            }
+        }
+        return this.backends
+    }
+
     onVoiceChange(voiceId: string): void {
         const backendId = this.config.store.claudeStatus.audio.backend as TtsBackendId
         // Replace the whole voicesByBackend object so Tabby's config-save sees
@@ -2516,6 +3114,13 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
             ...(this.config.store.claudeStatus.audio.voicesByBackend || {}),
             [backendId]: voiceId,
         }
+        // The user just picked a different voice — let the language
+        // filter follow it on the next ngDoCheck. Without this reset
+        // any earlier manual filter choice would keep the filter
+        // pinned to the wrong language (e.g. "All languages" while the
+        // newly-picked voice is Hungarian) and the dropdown looks
+        // disconnected from the selection.
+        this.voiceLanguageFilterTouched = false
         // Keep legacy field in sync for Web Speech so old code paths don't regress.
         if (backendId === 'webspeech') {
             this.config.store.claudeStatus.audio.voiceName = voiceId
@@ -2539,6 +3144,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     onBackendChange(backendId: TtsBackendId): void {
         this.config.store.claudeStatus.audio.backend = backendId
         this.save()
+        // New backend → re-sync the filter to that backend's saved
+        // voice. Drops any "user touched" pin from the previous backend.
+        this.voiceLanguageFilterTouched = false
         this.voicesLoading = !this.currentBackend?.voices?.length
         if (!this.voicesLoading) this.syncFilterToSelection()
     }
@@ -2719,6 +3327,57 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
 
     closePiperVoiceCatalog(): void {
         this.showPiperVoiceCatalog = false
+        this.stopPiperVoicePreview()
+    }
+
+    /**
+     * Toggle the Hugging Face sample MP3 for `entry`. Streams from the
+     * `samples/speaker_0.mp3` URL we derive in `piperInstallerService`.
+     * If the same row is already playing, stop it. If a different row is
+     * playing, stop it first then start the new one.
+     */
+    togglePiperVoicePreview(entry: PiperVoiceCatalogEntry): void {
+        if (this.catalogPreviewKey === entry.key) {
+            this.stopPiperVoicePreview()
+            return
+        }
+        this.stopPiperVoicePreview()
+        try {
+            const audio = new Audio(entry.sampleUrl)
+            audio.preload = 'auto'
+            audio.addEventListener('ended', () => {
+                if (this.catalogPreviewAudio === audio) this.stopPiperVoicePreview()
+            }, { once: true })
+            audio.addEventListener('error', () => {
+                if (this.catalogPreviewAudio === audio) this.stopPiperVoicePreview()
+            }, { once: true })
+            this.catalogPreviewAudio = audio
+            this.catalogPreviewKey = entry.key
+            void audio.play().catch(err => {
+                console.warn('[claude-status] Piper voice preview failed:', err)
+                this.stopPiperVoicePreview()
+            })
+        } catch (err) {
+            console.warn('[claude-status] Piper voice preview failed:', err)
+        }
+    }
+
+    private stopPiperVoicePreview(): void {
+        if (this.catalogPreviewAudio) {
+            try {
+                this.catalogPreviewAudio.pause()
+                this.catalogPreviewAudio.src = ''
+            } catch { /* noop */ }
+            this.catalogPreviewAudio = null
+        }
+        this.catalogPreviewKey = ''
+    }
+
+    /** ngFor trackBy for the catalog table — keeps DOM stable across
+     *  filter changes (so the Preview button's playing/stopped state
+     *  doesn't jump rows when the user types in the search box). */
+    trackByPiperKey(_index: number, entry: PiperVoiceCatalogEntry): string {
+        return entry.key
     }
 
     clearPiperCatalogFilters(): void {
@@ -3001,6 +3660,25 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         else this.expandedClosedGroups.add(cwd)
     }
 
+    setHistoryMode(mode: 'grouped' | 'flat'): void {
+        this.historyMode = mode
+        try { localStorage.setItem('tabby-claude-status.historyMode', mode) } catch { /* localStorage may be disabled */ }
+    }
+
+    /** ngFor trackBy for the history accordion. Without this the *ngFor
+     *  rebuilds DOM nodes on every change-detection cycle (because
+     *  `groupedClosedSessions` is a getter that returns a new array each
+     *  time), which made the accordion's chevron toggle visually glitchy
+     *  and dropped the click target on rapid CD passes. */
+    trackByCwd(_index: number, group: { cwd: string }): string {
+        return group.cwd
+    }
+
+    /** ngFor trackBy for the flat history list. */
+    trackBySessionId(_index: number, s: ClaudeSessionRecord): string {
+        return s.sessionId
+    }
+
     private applySessionFilter(list: ClaudeSessionRecord[]): ClaudeSessionRecord[] {
         const q = this.sessionFilter.trim().toLowerCase()
         if (!q) return list
@@ -3060,17 +3738,64 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
 
     copyToClipboard(text: string, key: string): void {
         if (!text) return
+        let copied = false
+        // Path 1 — Electron's renderer-side clipboard. Available when
+        // contextIsolation is off (Tabby's default) but newer Electron
+        // releases stopped exporting it directly from `require('electron')`,
+        // so `clipboard` may be undefined even when the require succeeds.
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const { clipboard } = require('electron')
-            clipboard.writeText(text)
-        } catch {
-            try {
-                navigator.clipboard?.writeText(text)
-            } catch {
-                /* nothing else to try */
+            const electron = require('electron')
+            if (electron?.clipboard?.writeText) {
+                electron.clipboard.writeText(text)
+                copied = true
             }
+        } catch { /* fall through */ }
+
+        // Path 2 — @electron/remote, which Tabby always loads. Exposes
+        // the same clipboard module via its main-process bridge.
+        if (!copied) {
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                const remote = require('@electron/remote')
+                const cb = remote?.clipboard
+                if (cb?.writeText) {
+                    cb.writeText(text)
+                    copied = true
+                }
+            } catch { /* fall through */ }
         }
+
+        // Path 3 — async navigator.clipboard. Requires a secure context
+        // and user activation; Tabby's renderer (file:// URL) is mostly
+        // OK on this but it's been observed to silently fail on some
+        // builds, so we don't rely on it as the only path.
+        if (!copied && typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+            try {
+                navigator.clipboard.writeText(text)
+                copied = true
+            } catch { /* fall through */ }
+        }
+
+        // Path 4 — last-resort document.execCommand('copy'). Deprecated
+        // but synchronous and works in any browser/Electron context.
+        if (!copied && typeof document !== 'undefined') {
+            try {
+                const ta = document.createElement('textarea')
+                ta.value = text
+                ta.style.position = 'fixed'
+                ta.style.opacity = '0'
+                document.body.appendChild(ta)
+                ta.select()
+                copied = document.execCommand('copy')
+                document.body.removeChild(ta)
+            } catch { /* nothing else to try */ }
+        }
+
+        if (!copied) {
+            console.warn('[claude-status] All clipboard write paths failed.')
+        }
+
         this.copiedKey = key
         if (this.copiedTimer) clearTimeout(this.copiedTimer)
         this.copiedTimer = setTimeout(() => {
@@ -3125,6 +3850,11 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
             this.activityUnsubscribe()
             this.activityUnsubscribe = null
         }
+        if (this.resumeErrorTimer) {
+            clearTimeout(this.resumeErrorTimer)
+            this.resumeErrorTimer = null
+        }
+        this.stopPiperVoicePreview()
         document.removeEventListener('click', this.docClickListener, true)
     }
 
@@ -3133,7 +3863,57 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     /** Re-read ~/.claude/.credentials.json and refresh the displayed status. */
     refreshCredStatus(): void {
         this.credentialsService.invalidate()
-        this.credStatus = this.credentialsService.getStatus()
+        this.refreshCredStatusInternal()
+        // Models depend on auth — drop the cached list so re-auth produces a
+        // fresh fetch on next open.
+        this.claudeApi.invalidateModels()
+    }
+
+    /**
+     * Fetch the live model list from the Anthropic API. Cached in the
+     * service so repeated dropdown opens don't re-hit /v1/models. Always
+     * resolves with *some* list (curated fallback on error).
+     */
+    async refreshModels(force = false): Promise<void> {
+        this.modelsLoading = true
+        try {
+            const cfg = this.config.store.claudeStatus.audio.dynamic
+            const { models, error } = await this.claudeApi.listModels({ force, cfg })
+            this.availableModels = models
+            this.modelsError = error
+            // If the user's stored model isn't in the fetched list (e.g. the
+            // API knows new ids and the user's saved id is now retired),
+            // surface it as a synthetic option so the dropdown still selects
+            // their value rather than silently switching to the first entry.
+            const stored = cfg.model
+            if (stored && !models.find(m => m.id === stored)) {
+                this.availableModels = [
+                    { id: stored, displayName: `${stored} (saved)` },
+                    ...models,
+                ]
+            }
+        } finally {
+            this.modelsLoading = false
+        }
+    }
+
+    /**
+     * Underlying credential-status read. Sets the loading flag while
+     * the read is in flight so the panel can show a placeholder on first
+     * paint. The read itself is sync (small local file) but we still
+     * yield to a microtask so it doesn't run on the critical path.
+     */
+    private refreshCredStatusInternal(): void {
+        this.credStatusLoading = true
+        // Single ~/.claude/.credentials.json read — fast, but yield first
+        // so the rest of the template paints before we touch the disk.
+        Promise.resolve().then(() => {
+            try {
+                this.credStatus = this.credentialsService.getStatus()
+            } finally {
+                this.credStatusLoading = false
+            }
+        })
     }
 
     formatExpiry(expiresAt: number): string {
@@ -3269,12 +4049,70 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
     }
 
     async resumeSession(session: ClaudeSessionRecord): Promise<void> {
-        await this.sessionRestore.resumeSession(session, 'resume')
+        console.info('[claude-status] Resume clicked for session', session.sessionId, 'cwd:', session.cwd)
+        const result = await this.sessionRestore.resumeSession(session, 'resume')
+        this.handleResumeResult(result)
     }
 
     /** Open a new tab forked off an active session (claude --resume <id> --fork-session). */
     async forkSession(session: ClaudeSessionRecord): Promise<void> {
-        await this.sessionRestore.resumeSession(session, 'fork')
+        console.info('[claude-status] Fork clicked for session', session.sessionId)
+        const result = await this.sessionRestore.resumeSession(session, 'fork')
+        this.handleResumeResult(result)
+    }
+
+    /**
+     * Build the same `cd "<cwd>" && claude --resume <id> <extra>` line we
+     * type into the new pty when Resume runs, and copy it to the
+     * clipboard. Lets the user paste it into any existing tab (or a
+     * non-Tabby terminal) when Tabby's auto-resume isn't working for
+     * them — e.g. when openTab can't find a profile that matches the
+     * cwd type.
+     */
+    copyResumeCommand(session: ClaudeSessionRecord, mode: 'resume' | 'fork' = 'resume'): void {
+        const cfg = this.config.store.claudeStatus.sessionRestore
+        const extra = (cfg?.extraArgs || '').trim()
+        const forkFlag = mode === 'fork' ? ' --fork-session' : ''
+        const quotedCwd = `"${(session.cwd || '').replace(/"/g, '\\"')}"`
+        const cmd = extra
+            ? `cd ${quotedCwd} && claude --resume ${session.sessionId}${forkFlag} ${extra}`
+            : `cd ${quotedCwd} && claude --resume ${session.sessionId}${forkFlag}`
+        this.copyToClipboard(cmd, 'cmd-' + session.sessionId)
+        this.resumeDropdownOpenFor = ''
+    }
+
+    /**
+     * Tracks which session row's split-button dropdown is currently
+     * open. Empty string = no dropdown open. Closed when the user
+     * clicks an item or anywhere outside (handled by the existing
+     * docClickListener with the .btn-group selector).
+     */
+    resumeDropdownOpenFor = ''
+
+    toggleResumeDropdown(session: ClaudeSessionRecord, ev: MouseEvent): void {
+        ev.stopPropagation()
+        ev.preventDefault()
+        this.resumeDropdownOpenFor =
+            this.resumeDropdownOpenFor === session.sessionId ? '' : session.sessionId
+    }
+
+    /**
+     * Surface a resume failure inline in the settings panel so the user
+     * actually sees it. We previously relied on Tabby's NotificationsService,
+     * but that's `@Optional()` — if the host process doesn't provide it the
+     * call is a no-op and Resume looks like it did nothing.
+     */
+    private handleResumeResult(result: { ok: boolean; error?: string }): void {
+        if (result.ok) {
+            this.resumeError = ''
+            return
+        }
+        this.resumeError = result.error || 'Resume failed (see DevTools console for details).'
+        if (this.resumeErrorTimer) clearTimeout(this.resumeErrorTimer)
+        this.resumeErrorTimer = setTimeout(() => {
+            this.resumeError = ''
+            this.resumeErrorTimer = null
+        }, 8000)
     }
 
     async resumeAllSessions(): Promise<void> {
@@ -3288,7 +4126,8 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
      */
     async resumeAllPreviousRun(): Promise<void> {
         for (const s of this.sessionRestore.previousRunSessions()) {
-            await this.sessionRestore.resumeSession(s, 'resume')
+            const result = await this.sessionRestore.resumeSession(s, 'resume')
+            this.handleResumeResult(result)
         }
     }
 
@@ -3305,29 +4144,49 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
 
     // ── Node.js detection ────────────────────────────────────────────
 
-    private detectNodePath(): { path: string | null; version: string | null; error: string | null } {
+    /**
+     * Update `nodeInfo` from a fresh detection, with the loading flag set
+     * so the diagnostics row can show a skeleton while `node --version` /
+     * `where node` run.
+     */
+    private async refreshNodeInfo(): Promise<void> {
+        this.nodeInfoLoading = true
         try {
-            const version = execSync('node --version', {
+            this.nodeInfo = await this.detectNodePathAsync()
+        } finally {
+            this.nodeInfoLoading = false
+        }
+    }
+
+    private async detectNodePathAsync(): Promise<{
+        path: string | null
+        version: string | null
+        error: string | null
+    }> {
+        try {
+            const { stdout: verOut } = await execFileAsync('node', ['--version'], {
                 encoding: 'utf8',
                 timeout: 5000,
                 windowsHide: true,
-            }).trim()
+            })
+            const version = String(verOut).trim()
 
             let nodePath: string | null = null
             try {
-                const whichCmd = process.platform === 'win32' ? 'where node' : 'which node'
-                nodePath = execSync(whichCmd, {
-                    encoding: 'utf8',
-                    timeout: 5000,
-                    windowsHide: true,
-                }).trim().split(/\r?\n/)[0] // `where` on Windows may return multiple lines
-            } catch (_) {
-                // `which`/`where` failed but `node --version` worked — node is available but path unknown
+                const isWin = process.platform === 'win32'
+                const { stdout: pathOut } = await execFileAsync(
+                    isWin ? 'where' : 'which',
+                    ['node'],
+                    { encoding: 'utf8', timeout: 5000, windowsHide: true },
+                )
+                // `where` on Windows may return multiple lines — take the first.
+                nodePath = String(pathOut).trim().split(/\r?\n/)[0]
+            } catch {
+                // `which`/`where` failed but `node --version` worked — node is on PATH but its location is unknown.
             }
-
             return { path: nodePath, version, error: null }
         } catch (e: any) {
-            return { path: null, version: null, error: e.message || 'node not found' }
+            return { path: null, version: null, error: e?.message || 'node not found' }
         }
     }
 
@@ -3353,50 +4212,98 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
      * `hook.js`) rather than exact absolute path, so a command like
      * `"/mnt/c/Program Files/nodejs/node.exe" "C:\\...\\tabby-claude-status\\hook.js"`
      * inside a WSL settings file is correctly recognised as "our hook".
+     *
+     * Async + uses the cached WSL distro list — avoids the duplicate
+     * `wsl.exe -l -q` we used to fire (once on ngOnInit, again here).
      */
-    checkHooks(): void {
-        const locations: HookLocationStatus[] = []
+    async checkHooks(): Promise<void> {
+        this.hooksLoading = true
 
-        // Windows ~/.claude/settings.json
-        locations.push(
-            this.analyseSettingsFile('Windows', path.join(os.homedir(), '.claude', 'settings.json')),
-        )
+        const placeholder = (label: string, settingsPath: string): HookLocationStatus => ({
+            label,
+            path: settingsPath,
+            state: 'no-file',
+            totalEvents: HOOK_EVENTS.length,
+            configuredEvents: 0,
+            missingEvents: [...HOOK_EVENTS],
+            isLoading: true,
+        })
 
-        // Each WSL distro has its own ~/.claude/settings.json. Enumerate via
-        // `wsl.exe -l -q` and read via the \\wsl.localhost UNC mount.
-        if (process.platform === 'win32') {
-            for (const distro of this.getWslDistros()) {
-                const settingsPath = this.findWslSettingsPath(distro)
-                if (settingsPath) {
-                    locations.push(this.analyseSettingsFile(`WSL ${distro}`, settingsPath))
-                } else {
-                    locations.push({
-                        label: `WSL ${distro}`,
-                        path: `\\\\wsl.localhost\\${distro}\\home\\<user>\\.claude\\settings.json`,
-                        state: 'no-file',
-                        totalEvents: HOOK_EVENTS.length,
-                        configuredEvents: 0,
-                        missingEvents: [...HOOK_EVENTS],
-                    })
+        try {
+            // Build the placeholder list FIRST so the tab strip renders
+            // immediately with spinners on each badge — instead of
+            // showing the previous scan's stale counts (1/9 vs 9/9)
+            // until everything has finished re-resolving.
+            const windowsPath = path.join(os.homedir(), '.claude', 'settings.json')
+            const initial: HookLocationStatus[] = [placeholder('Windows', windowsPath)]
+            let distros: string[] = []
+            if (process.platform === 'win32') {
+                distros = await this.getWslDistrosAsync()
+                for (const d of distros) {
+                    initial.push(placeholder(`WSL ${d}`, ''))
                 }
             }
-        }
+            this.hookLocations = initial
+            const stillPresent = initial.find(l => l.label === this.activeHookLocation)
+            if (!stillPresent) {
+                this.activeHookLocation = initial[0]?.label || ''
+            }
 
-        this.hookLocations = locations
+            // Resolve each location independently — as each finishes, swap
+            // its entry into hookLocations so its tab + detail panel
+            // update immediately, instead of all snapping at the end.
+            const replace = (label: string, next: HookLocationStatus): void => {
+                next.isLoading = false
+                this.hookLocations = this.hookLocations.map(l => l.label === label ? next : l)
+            }
 
-        // Aggregate: ok if every location is ok; partial if any location has
-        // ≥1 event configured; missing otherwise.
-        const anyOk = locations.some(l => l.state === 'ok')
-        const anyPartial = locations.some(l => l.configuredEvents > 0)
-        const allOk = locations.length > 0 && locations.every(l => l.state === 'ok')
-        if (allOk) {
-            this.hooksStatus = 'ok'
-        } else if (anyOk || anyPartial) {
-            this.hooksStatus = 'partial'
-        } else if (locations.some(l => l.state === 'error')) {
-            this.hooksStatus = 'error'
-        } else {
-            this.hooksStatus = 'missing'
+            const probes: Promise<void>[] = []
+            probes.push(
+                this.analyseSettingsFileAsync('Windows', windowsPath)
+                    .then(r => replace('Windows', r)),
+            )
+            for (const d of distros) {
+                probes.push((async () => {
+                    const settingsPath = await this.findWslSettingsPathAsync(d)
+                    const next = settingsPath
+                        ? await this.analyseSettingsFileAsync(`WSL ${d}`, settingsPath)
+                        : {
+                            label: `WSL ${d}`,
+                            path: `\\\\wsl.localhost\\${d}\\home\\<user>\\.claude\\settings.json`,
+                            state: 'no-file' as const,
+                            totalEvents: HOOK_EVENTS.length,
+                            configuredEvents: 0,
+                            missingEvents: [...HOOK_EVENTS],
+                        }
+                    replace(`WSL ${d}`, next)
+                })())
+            }
+            await Promise.all(probes)
+
+            // Aggregate, ignoring 'no-file' locations: a distro that
+            // doesn't have ~/.claude/settings.json yet is not a "partial"
+            // state — it's just absent, and treating it as a problem
+            // would make the badge yellow forever for users who only run
+            // Claude Code on one of their distros.
+            const meaningful = this.hookLocations.filter(l => l.state !== 'no-file')
+            const anyError = meaningful.some(l => l.state === 'error')
+            const allOk = meaningful.length > 0 && meaningful.every(l => l.state === 'ok')
+            const anyConfigured = meaningful.some(l => l.configuredEvents > 0)
+            if (allOk) {
+                this.hooksStatus = 'ok'
+            } else if (anyError) {
+                this.hooksStatus = 'error'
+            } else if (anyConfigured) {
+                this.hooksStatus = 'partial'
+            } else if (meaningful.length === 0) {
+                // No settings.json exists anywhere yet — nothing to scan,
+                // nothing to flag.
+                this.hooksStatus = 'ok'
+            } else {
+                this.hooksStatus = 'missing'
+            }
+        } finally {
+            this.hooksLoading = false
         }
     }
 
@@ -3413,7 +4320,37 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         )
     }
 
-    private analyseSettingsFile(label: string, settingsPath: string): HookLocationStatus {
+    /** Currently-selected location for the Hooks sub-tab view. */
+    get currentHookLocation(): HookLocationStatus | null {
+        return this.hookLocations.find(l => l.label === this.activeHookLocation) || null
+    }
+
+    /**
+     * Run the existing setupHooks pipeline against a single location, by
+     * mapping the location's label back to the SetupChoice the underlying
+     * code expects. "Windows" → windows target; "WSL <name>" → wsl target.
+     */
+    setupHooksForLocation(loc: HookLocationStatus): void {
+        const choice = this.locationToChoice(loc)
+        if (choice) this.setupHooks(choice)
+    }
+
+    removeHooksFromLocation(loc: HookLocationStatus): void {
+        const choice = this.locationToChoice(loc)
+        if (choice) this.removeHooks(choice)
+    }
+
+    private locationToChoice(loc: HookLocationStatus): SetupChoice | null {
+        if (loc.label === 'Windows') return { target: 'windows' }
+        const m = loc.label.match(/^WSL\s+(.+)$/)
+        if (m) return { target: 'wsl', distro: m[1] }
+        return null
+    }
+
+    private async analyseSettingsFileAsync(
+        label: string,
+        settingsPath: string,
+    ): Promise<HookLocationStatus> {
         const base: HookLocationStatus = {
             label,
             path: settingsPath,
@@ -3423,8 +4360,13 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
             missingEvents: [...HOOK_EVENTS],
         }
         try {
-            if (!fs.existsSync(settingsPath)) return base
-            const raw = fs.readFileSync(settingsPath, 'utf-8')
+            let raw: string
+            try {
+                raw = await fsp.readFile(settingsPath, 'utf-8')
+            } catch (err: any) {
+                if (err?.code === 'ENOENT') return base
+                throw err
+            }
             const settings = JSON.parse(raw)
             const hooks = (settings && settings.hooks) || {}
             const missing: string[] = []
@@ -3465,19 +4407,78 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
         return lower.includes('tabby-claude-status') && lower.includes('hook.js')
     }
 
-    private getWslDistros(): string[] {
+    /**
+     * Refresh `this.wslDistros` (and the loading flag) from a fresh
+     * `wsl.exe -l -q` shell-out. Memoised — subsequent calls return the
+     * cached list unless `force` is set, so the settings panel only pays
+     * the WSL boot-up cost once per Tabby session.
+     */
+    private async refreshWslDistros(force = false): Promise<string[]> {
+        if (process.platform !== 'win32') {
+            this.wslDistros = []
+            this.wslDistrosCache = []
+            this.wslDistrosLoading = false
+            return []
+        }
+        if (!force && this.wslDistrosCache !== null) {
+            this.wslDistros = this.wslDistrosCache
+            this.wslDistrosLoading = false
+            return this.wslDistrosCache
+        }
+        this.wslDistrosLoading = true
+        try {
+            const distros = await this.detectWslDistros()
+            this.wslDistros = distros
+            this.wslDistrosCache = distros
+            return distros
+        } finally {
+            this.wslDistrosLoading = false
+        }
+    }
+
+    /** Cached list, refreshing in the background if we don't have one yet. */
+    private async getWslDistrosAsync(): Promise<string[]> {
+        if (this.wslDistrosCache !== null) return this.wslDistrosCache
+        return this.refreshWslDistros()
+    }
+
+    private async detectWslDistros(): Promise<string[]> {
+        const parse = (raw: string): string[] => raw
+            .split(/\r?\n/)
+            .map(s => s.replace(/\0/g, '').trim())
+            .filter(Boolean)
+            .filter(d => !/^(rancher-desktop|docker-desktop)/i.test(d))
+
+        // Primary path: promisified execFile. utf16le matches wsl.exe's
+        // BOM-prefixed UTF-16 output.
+        try {
+            const { stdout } = await execFileAsync('wsl.exe', ['-l', '-q'], {
+                encoding: 'utf16le' as BufferEncoding,
+                timeout: 15000,
+                windowsHide: true,
+            })
+            const distros = parse(String(stdout))
+            if (distros.length) return distros
+            // Empty stdout — could be no distros, could be a transient
+            // wsl.exe quirk. Fall through to the sync fallback before
+            // declaring "no WSL".
+        } catch (err) {
+            console.warn('[claude-status] async wsl.exe -l -q failed, falling back to sync:', err)
+        }
+
+        // Fallback path: execFileSync. We used this from the original
+        // settings tab implementation for years and know it works in the
+        // Electron renderer; the only reason for the async-first attempt
+        // is to avoid blocking ngOnInit on cold WSL boot.
         try {
             const out = execFileSync('wsl.exe', ['-l', '-q'], {
                 encoding: 'utf16le',
-                timeout: 5000,
+                timeout: 15000,
                 windowsHide: true,
             })
-            return out
-                .split(/\r?\n/)
-                .map(s => s.replace(/\0/g, '').trim())
-                .filter(Boolean)
-                .filter(d => !/^(rancher-desktop|docker-desktop)/i.test(d))
-        } catch {
+            return parse(out)
+        } catch (err) {
+            console.warn('[claude-status] sync wsl.exe -l -q failed:', err)
             return []
         }
     }
@@ -3513,6 +4514,45 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy {
             /* ignore */
         }
         return null
+    }
+
+    /**
+     * Async sibling of {@link findWslSettingsPath}. Used by `checkHooks` so
+     * the panel-load critical path never blocks on a 9P UNC traversal —
+     * cold WSL would otherwise add seconds before the table appears.
+     */
+    private async findWslSettingsPathAsync(distro: string): Promise<string | null> {
+        const homeRoot = `\\\\wsl.localhost\\${distro}\\home`
+        let users: string[] = []
+        try {
+            users = await fsp.readdir(homeRoot)
+        } catch {
+            return null
+        }
+        // Probe every /home/<user>/.claude/settings.json in parallel and
+        // take the first hit. `Promise.all` keeps the wall time at the
+        // slowest UNC stat instead of summing them.
+        const probes = await Promise.all(
+            users.map(async user => {
+                const candidate = path.join(homeRoot, user, '.claude', 'settings.json')
+                try {
+                    await fsp.access(candidate, fs.constants.F_OK)
+                    return candidate
+                } catch {
+                    return null
+                }
+            }),
+        )
+        const hit = probes.find(Boolean)
+        if (hit) return hit
+        // Root-only distros (rare) keep their settings at /root/.claude/.
+        const rootCandidate = `\\\\wsl.localhost\\${distro}\\root\\.claude\\settings.json`
+        try {
+            await fsp.access(rootCandidate, fs.constants.F_OK)
+            return rootCandidate
+        } catch {
+            return null
+        }
     }
 
     onSetupChoice(event: MouseEvent, choice: SetupChoice): void {

@@ -44,6 +44,11 @@ export interface PiperVoiceCatalogEntry {
     onnxUrl: string
     jsonUrl: string
     sizeBytes: number
+    /** URL to a pre-generated MP3 sample for this voice. Hugging Face
+     *  ships them in `<voice-dir>/samples/speaker_0.mp3` for every voice
+     *  in rhasspy/piper-voices, so we can derive the URL from `onnxUrl`
+     *  without an extra index call. */
+    sampleUrl: string
 }
 
 const PIPER_PIP_PACKAGE = 'piper-tts'
@@ -296,6 +301,12 @@ export class PiperInstallerService {
                 quality: v.quality || '',
                 onnxUrl: `https://huggingface.co/rhasspy/piper-voices/resolve/main/${onnxRel}`,
                 jsonUrl: `https://huggingface.co/rhasspy/piper-voices/resolve/main/${jsonRel}`,
+                // Sample MP3 sits at <voice-dir>/samples/speaker_0.mp3 in
+                // rhasspy/piper-voices. Derive from the .onnx path by
+                // replacing the basename. speaker_0 is the canonical
+                // single-speaker preview; multi-speaker voices have
+                // speaker_1, _2 too — picking _0 covers both cases.
+                sampleUrl: `https://huggingface.co/rhasspy/piper-voices/resolve/main/${onnxRel.replace(/\/[^/]+$/, '/samples/speaker_0.mp3')}`,
                 sizeBytes: files[onnxRel]?.size_bytes ?? 0,
             })
         }

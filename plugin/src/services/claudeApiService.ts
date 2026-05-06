@@ -36,9 +36,88 @@ const SYSTEM_PROMPT =
  * cache no matter what we mark. Padding the system to 4096 tokens to force
  * caching would waste more tokens than it saves at our request volume.
  */
+/**
+ * One entry in the model dropdown shown by the settings UI. We surface only
+ * the fields the dropdown needs — id (used as the API param) and a friendly
+ * display name. Sorted server-side by created_at desc, so newest first.
+ */
+export interface ClaudeModelOption {
+    id: string
+    displayName: string
+}
+
 @Injectable({ providedIn: 'root' })
 export class ClaudeApiService {
+    /**
+     * Fallback list shown when /v1/models is unreachable (no auth, offline,
+     * subscription token without `models:read` scope, etc.). Keep small —
+     * just enough to let the user pick something sensible. The user can
+     * always type in the SDK any model id, but the dropdown needs *some*
+     * options for `<select>` to be useful.
+     */
+    private static readonly STATIC_FALLBACK_MODELS: ClaudeModelOption[] = [
+        { id: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5' },
+        { id: 'claude-sonnet-4-5', displayName: 'Claude Sonnet 4.5' },
+        { id: 'claude-opus-4-5', displayName: 'Claude Opus 4.5' },
+    ]
+
+    private modelsCache: ClaudeModelOption[] | null = null
+    private modelsCacheError: string | null = null
+
     constructor(private credentials: ClaudeCredentialsService) {}
+
+    /**
+     * Returns the list of models the current auth (subscription token or
+     * API key) can use. Memoised per service lifetime — settings UI calls
+     * this each time the audio tab opens, but we only hit /v1/models once.
+     *
+     * On error, returns the static fallback list and caches the error so
+     * the settings UI can show "Couldn't reach Anthropic API — showing a
+     * curated list" instead of failing silently.
+     */
+    async listModels(opts: { force?: boolean; cfg: ClaudeStatusDynamicConfig }):
+        Promise<{ models: ClaudeModelOption[]; error: string | null; fromCache: boolean }> {
+        if (!opts.force && this.modelsCache) {
+            return { models: this.modelsCache, error: this.modelsCacheError, fromCache: true }
+        }
+        const auth = this.resolveAuth(opts.cfg)
+        if (!auth) {
+            this.modelsCache = ClaudeApiService.STATIC_FALLBACK_MODELS
+            this.modelsCacheError = 'Sign in to Claude Code or paste an API key to fetch the live list.'
+            return { models: this.modelsCache, error: this.modelsCacheError, fromCache: false }
+        }
+        try {
+            const clientOptions: any = {
+                dangerouslyAllowBrowser: true,
+                ...(auth.kind === 'oauth'
+                    ? { authToken: auth.token, defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' } }
+                    : { apiKey: auth.token }),
+            }
+            const client = new Anthropic(clientOptions)
+            // The SDK exposes models.list with auto-pagination; we cap at a
+            // single page (default 20) — the catalog is small and the
+            // dropdown doesn't need every legacy variant.
+            const page = await client.models.list({ limit: 100 })
+            const data = (page as any).data as Array<{ id: string; display_name?: string }>
+            const models = data
+                .map(m => ({ id: m.id, displayName: m.display_name || m.id }))
+                .sort((a, b) => a.displayName.localeCompare(b.displayName))
+            this.modelsCache = models
+            this.modelsCacheError = null
+            return { models, error: null, fromCache: false }
+        } catch (err: any) {
+            console.warn('[claude-status] /v1/models failed:', err?.message || err)
+            this.modelsCache = ClaudeApiService.STATIC_FALLBACK_MODELS
+            this.modelsCacheError = err?.message || String(err)
+            return { models: this.modelsCache, error: this.modelsCacheError, fromCache: false }
+        }
+    }
+
+    /** Drop the cached models list — caller wants a fresh fetch. */
+    invalidateModels(): void {
+        this.modelsCache = null
+        this.modelsCacheError = null
+    }
 
     /**
      * Returns the generated phrase, or `null` on timeout / API error / empty

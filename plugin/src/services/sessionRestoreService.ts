@@ -293,12 +293,12 @@ export class SessionRestoreService {
     async resumeSession(
         session: ClaudeSessionRecord,
         mode: 'resume' | 'fork' = 'resume',
-    ): Promise<boolean> {
+    ): Promise<{ ok: boolean; error?: string }> {
         if (!this.terminalService) {
-            this.notifications?.error?.(
-                'Session restore unavailable — the tabby-local plugin is not loaded.',
-            )
-            return false
+            const msg = 'Session restore unavailable — the tabby-local plugin is not loaded.'
+            this.notifications?.error?.(msg)
+            console.error('[claude-status]', msg)
+            return { ok: false, error: msg }
         }
 
         const cfg = this.configService.getSessionRestoreConfig()
@@ -316,16 +316,28 @@ export class SessionRestoreService {
 
         // Clamp to a sane range. 0 is allowed (user opt-out) but step is 0.1s
         // in the UI so the smallest non-zero value is 100ms.
-        const delaySec = Math.max(0, Math.min(cfg.resumeCdDelaySec ?? 1.2, 10))
-        const cdDelayMs = Math.round(delaySec * 1000)
+        const cdDelayMs = Math.round(Math.max(0, Math.min(cfg.resumeCdDelaySec ?? 1.2, 10)) * 1000)
+        const openDelayMs = Math.round(Math.max(0, Math.min(cfg.resumeOpenDelaySec ?? 1.5, 30)) * 1000)
 
         const profile = await this.resolveProfile(session)
 
         try {
             const tab = await this.terminalService.openTab(profile, session.cwd)
-            if (!tab) return false
-            // First wait for the pty + shell to be ready for input. 800ms is
-            // empirically generous but still faster than a click.
+            if (!tab) {
+                const msg = profile
+                    ? `Tabby returned no tab for profile ${profile.name || profile.id}. Check the profile's command and cwd.`
+                    : 'Tabby returned no tab. The Claude session was recorded before profile capture shipped, and no profile could be inferred from the cwd. Open a tab manually with the right shell and try again.'
+                console.error('[claude-status] resumeSession:', msg, { session, profile })
+                this.notifications?.error?.(msg)
+                return { ok: false, error: msg }
+            }
+            // Wait for the pty + shell to be ready for input. The
+            // duration is `cfg.resumeOpenDelaySec` — needs to exceed the
+            // shell's first-prompt readiness time (cold WSL: 1-2s; with
+            // oh-my-zsh + plugins: longer). If too short, the cd line
+            // is sent into the still-initialising shell and dropped, and
+            // the user's tab ends up at the profile's default cwd
+            // instead of the session cwd.
             setTimeout(() => {
                 try { tab.sendInput(cdCmd) } catch (err) {
                     console.error('[claude-status] cd sendInput failed:', err)
@@ -336,14 +348,13 @@ export class SessionRestoreService {
                         console.error('[claude-status] resume sendInput failed:', err)
                     }
                 }, cdDelayMs)
-            }, 800)
-            return true
+            }, openDelayMs)
+            return { ok: true }
         } catch (err) {
-            console.error('[claude-status] resumeSession failed:', err)
-            this.notifications?.error?.(
-                `Failed to resume Claude session: ${(err as Error).message}`,
-            )
-            return false
+            const msg = (err as Error)?.message || String(err)
+            console.error('[claude-status] resumeSession failed:', err, { session, profile })
+            this.notifications?.error?.(`Failed to resume Claude session: ${msg}`)
+            return { ok: false, error: msg }
         }
     }
 
@@ -368,16 +379,15 @@ export class SessionRestoreService {
      */
     private async resolveProfile(session: ClaudeSessionRecord): Promise<any | undefined> {
         if (!this.profilesService) return undefined
-        if (!session.profileId && !session.profileType) return undefined
         try {
             const profiles = await this.profilesService.getProfiles()
+            // Path 1 — exact profile id captured at SessionStart.
             if (session.profileId) {
                 const exact = profiles.find(p => p.id === session.profileId)
                 if (exact) return exact
             }
-            // Same id no longer exists — fall back to any profile of the same
-            // type so a Windows session at least lands in a Windows-capable
-            // shell rather than the WSL default.
+            // Path 2 — same profile type (Windows session falls back to a
+            // Windows shell, WSL session to a WSL shell).
             if (session.profileType) {
                 const sameType = profiles.find(p => p.type === session.profileType)
                 if (sameType) {
@@ -390,16 +400,59 @@ export class SessionRestoreService {
                     return sameType
                 }
             }
+            // Path 3 — legacy records that pre-date the profile capture
+            // upgrade have neither profileId nor profileType. Without
+            // them, openTab(undefined, '/home/stevenp/...') falls through
+            // to Tabby's default profile, which on Windows is typically
+            // PowerShell — and PowerShell can't start in a /home/...
+            // cwd, so the openTab call rejects and Resume silently does
+            // nothing. Pick a profile based on the cwd shape instead.
+            const inferred = this.inferProfileFromCwd(profiles, session.cwd)
+            if (inferred) {
+                console.warn(
+                    '[claude-status] Legacy session record has no profile metadata; inferred',
+                    inferred.name, '(' + inferred.type + ')',
+                    'from cwd', session.cwd,
+                )
+                return inferred
+            }
             console.warn(
                 '[claude-status] Could not resolve profile for session',
                 session.sessionId,
-                '(stored id:', session.profileId, ') — using default.',
+                '— using Tabby default.',
             )
             return undefined
         } catch (err) {
             console.warn('[claude-status] resolveProfile failed:', err)
             return undefined
         }
+    }
+
+    /**
+     * Pick the first profile whose `type` is plausible for the given
+     * cwd. Linux-style absolute paths (`/home/...`, `/root/...`,
+     * `/tmp/...`, `/mnt/...`) → a WSL profile. Windows-style drive paths
+     * (`C:\...`) → a Windows local profile. Used only for legacy
+     * sessions where SessionStart didn't capture profile metadata.
+     */
+    private inferProfileFromCwd(profiles: any[], cwd: string | undefined): any | undefined {
+        if (!cwd) return undefined
+        const isLinuxPath = /^\/(home|root|tmp|mnt|usr|var|opt|srv)(\/|$)/i.test(cwd)
+        const isWindowsPath = /^[a-z]:[\\/]/i.test(cwd)
+        if (isLinuxPath) {
+            // Tabby's WSL profiles are typed `local` with a wsl.exe
+            // command; the dedicated `wsl` type is what newer Tabby
+            // versions assign. Try both, then anything whose command
+            // looks like wsl.exe.
+            return profiles.find(p => p.type === 'wsl')
+                || profiles.find(p => p.type === 'local'
+                    && /wsl(\.exe)?\b/i.test(p.options?.command || ''))
+        }
+        if (isWindowsPath) {
+            return profiles.find(p => p.type === 'local'
+                && !/wsl(\.exe)?\b/i.test(p.options?.command || ''))
+        }
+        return undefined
     }
 
     /**
@@ -440,8 +493,8 @@ export class SessionRestoreService {
         const sessions = this.openSessions()
         let opened = 0
         for (const s of sessions) {
-            const ok = await this.resumeSession(s)
-            if (ok) opened++
+            const result = await this.resumeSession(s)
+            if (result.ok) opened++
         }
         return opened
     }

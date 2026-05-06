@@ -50,6 +50,17 @@ export class AudioService {
     }
 
     /**
+     * Push the user's saved Piper paths into the backend instance. Without
+     * this the backend's exePath/modelPath fields stay empty until the
+     * first `speakText()` call, which makes `isAvailable()` lie to anyone
+     * (e.g. the settings panel's backend dropdown) that probes earlier.
+     */
+    configurePiperFromConfig(): void {
+        const cfg = this.configService.getAudioConfig()
+        this.piper.configure(cfg.piperExePath, cfg.piperModelPath)
+    }
+
+    /**
      * Announce the given status. Dispatches to one of three pipelines based on
      * `mode`:
      * - `'tts'` — speak the static `statusTexts[status]` via the chosen backend

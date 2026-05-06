@@ -43,6 +43,17 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
     private fileWatcher: fs.FSWatcher | null = null
     private pollInterval: ReturnType<typeof setInterval> | null = null
     private lastFileTs = 0
+    /**
+     * Flipped to true when the renderer fires `beforeunload` — i.e. the
+     * user is closing the Tabby window. Tabby then mass-detaches every
+     * tab on its way out, and our `detach()` callback would otherwise
+     * call `sessionRestore.markClosed()` for every active Claude
+     * session, sending them all to History instead of preserving them
+     * as the next run's "Previous run" bucket. Skipping the markClosed
+     * during shutdown keeps `closed=false` on those records, which is
+     * what `migrateIfNeeded()` looks for to populate "Previous run".
+     */
+    private isShuttingDown = false
 
     // Display-surface bookkeeping per terminal
     private baseTitles: Map<BaseTerminalTabComponent, string> = new Map()
@@ -98,6 +109,21 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 }
             })
         }
+
+        // Detect Tabby shutdown so the mass-detach that follows doesn't
+        // dump every active Claude session into History. `beforeunload`
+        // fires synchronously before the renderer is destroyed, and
+        // every `detach(terminal)` Tabby fires afterwards reads this
+        // flag and skips the `markClosed` call. The `capture: true` is
+        // important — without it Tabby's own beforeunload handler may
+        // run first and we miss the signal.
+        if (typeof window !== 'undefined') {
+            window.addEventListener(
+                'beforeunload',
+                () => { this.isShuttingDown = true },
+                { capture: true },
+            )
+        }
     }
 
     attach(terminal: BaseTerminalTabComponent): void {
@@ -129,13 +155,18 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         this.terminals.delete(terminal)
 
         // Push any Claude sessions that were running in this tab into the
-        // closed/history bucket. Relying on Claude Code's `SessionEnd` hook
-        // alone is unreliable — if the user closes the Tabby tab while
-        // Claude is still running, no SessionEnd fires. The tab-close event
-        // is the authoritative "this session is no longer open" signal.
+        // closed/history bucket — UNLESS Tabby itself is shutting down
+        // (beforeunload fired). On Tabby quit, every tab's `detach()`
+        // fires, and marking those sessions closed would empty the
+        // "Previous run" bucket on next launch. The previous-run flow
+        // depends on `closed=false` records carrying the prior run's
+        // runId, which `migrateIfNeeded()` then surfaces on relaunch.
+        // For mid-session tab closes (the user clicking ×), we still
+        // want to mark the session closed so it goes to History.
         for (const [session, t] of this.sessionTerminals) {
             if (t === terminal) {
                 this.sessionTerminals.delete(session)
+                if (this.isShuttingDown) continue
                 try {
                     this.sessionRestore.markClosed(session)
                 } catch (err) {
