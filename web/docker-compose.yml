@@ -1,0 +1,30 @@
+# Run behind a label-driven local proxy (e.g. local-proxy at
+# https://github.com/steven-pribilinskiy/local-proxy). No port mapping —
+# the proxy reaches the container over the shared `traefik` network on its
+# internal port 3000.
+
+services:
+  web:
+    build: .
+    networks: [traefik]
+    labels:
+      local-proxy.host: "tabby-claude-status.lvh.me"
+      local-proxy.port: "3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATA_DIR: /app/data
+      # tabby-mcp-server runs in the host's Tabby process; reach it via the
+      # docker host bridge. On Linux Docker (no Desktop) this needs the
+      # host-gateway alias below; Docker Desktop maps host.docker.internal
+      # automatically and ignores extra_hosts.
+      TABBY_MCP_URL: http://host.docker.internal:3001/mcp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+networks:
+  traefik:
+    external: true
