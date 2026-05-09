@@ -132,4 +132,4 @@ See [`tabby-claude-status-plugin-2026.md`](https://notes.lvh.me/#/tabby-claude-s
 
 ## Upstream
 
-Source material: `tabby-claude-status-gse@1.0.1` (MIT, author `graphix`, hosted at `git.gsat.us/GSE/tabby-claude-status`). Local fork exists so divergent changes (multi-backend TTS, display-surface toggles) have a home.
+Forked from `tabby-claude-status-gse@1.0.1` (MIT, author `graphix`). The original repo is on a private GitLab (`git.gsat.us/GSE/tabby-claude-status`) and isn't publicly browsable — the only public artifact of the upstream is the npm tarball under `tabby-claude-status-gse`. This fork is published as `tabby-claude-status` on npm and developed openly in [this repo](https://github.com/steven-pribilinskiy/tabby-claude-status). Significant divergence from upstream: multi-backend TTS (Edge / Windows OneCore / Piper), display-surface toggles (emoji prefix, progress bar, taskbar flash & overlay), Haiku-narrated dynamic phrases, session restore, mic/Zoom-aware muting, sound-effect mode, activity log.

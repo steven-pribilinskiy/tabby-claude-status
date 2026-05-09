@@ -13,14 +13,14 @@
   ],
   "author": "Steven Prybylynskyi",
   "license": "MIT",
-  "homepage": "https://github.com/steven-pribilinskiy/windows-settings/tree/main/tabby-claude-status#readme",
+  "homepage": "https://github.com/steven-pribilinskiy/tabby-claude-status/tree/main/plugin#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/steven-pribilinskiy/windows-settings.git",
-    "directory": "tabby-claude-status"
+    "url": "git+https://github.com/steven-pribilinskiy/tabby-claude-status.git",
+    "directory": "plugin"
   },
   "bugs": {
-    "url": "https://github.com/steven-pribilinskiy/windows-settings/issues"
+    "url": "https://github.com/steven-pribilinskiy/tabby-claude-status/issues"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

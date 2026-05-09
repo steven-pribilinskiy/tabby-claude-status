@@ -153,9 +153,12 @@ process.stdin.on('end', () => {
         if (event.transcript_path) status.transcript_path = event.transcript_path
         fs.writeFileSync(STATUS_FILE, JSON.stringify(status))
 
-        // Fire-and-forget seed to windows-settings so the server's
+        // Fire-and-forget seed to the companion webapp so its
         // session→ancestors cache is populated for subsequent curl-only events.
+        // Override via TABBY_CLAUDE_STATUS_WEBHOOK_URL.
         try {
+            const webhookUrl = process.env.TABBY_CLAUDE_STATUS_WEBHOOK_URL
+                || 'https://tabby-claude-status.lvh.me/api/claude/hook'
             const https = require('https')
             const payload = JSON.stringify({
                 hook_event_name: name,
@@ -165,7 +168,7 @@ process.stdin.on('end', () => {
                 ancestors: ancestors,
                 ppid: process.ppid,
             })
-            const req = https.request('https://windows-settings.lvh.me/api/claude/hook', {
+            const req = https.request(webhookUrl, {
                 method: 'POST',
                 headers: {
                     'content-type': 'application/json',
