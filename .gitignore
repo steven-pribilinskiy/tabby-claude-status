@@ -6,6 +6,10 @@ dist/
 # Webapp data dir — runtime state, not source
 web/data/
 
+# Vite production build output (server reads from here at runtime, but it's
+# regenerated on every `npm run build:client` / `docker build`).
+web/public/
+
 # Tooling
 .idea/
 .vscode/

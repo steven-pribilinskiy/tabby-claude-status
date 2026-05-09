@@ -784,7 +784,7 @@ function DisplayMenu({
 							setDisplay(
 								Object.fromEntries(
 									DISPLAY_FIELDS.map(([k]) => [k, true]),
-								) as DisplayOptions,
+								) as unknown as DisplayOptions,
 							)
 						}
 						className="flex-1 px-2 py-1 rounded text-[11px] border border-[var(--border)] hover:bg-[var(--border)]"
@@ -797,7 +797,7 @@ function DisplayMenu({
 							setDisplay(
 								Object.fromEntries(
 									DISPLAY_FIELDS.map(([k]) => [k, false]),
-								) as DisplayOptions,
+								) as unknown as DisplayOptions,
 							)
 						}
 						className="flex-1 px-2 py-1 rounded text-[11px] border border-[var(--border)] hover:bg-[var(--border)]"
