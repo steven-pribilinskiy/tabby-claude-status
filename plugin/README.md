@@ -128,8 +128,6 @@ From inside WSL, invoke Windows `node.exe` via interop so PIDs and `%TEMP%` reso
 "/mnt/c/Program Files/nodejs/node.exe" "C:\Users\<you>\AppData\Roaming\tabby\plugins\node_modules\tabby-claude-status\hook.js"
 ```
 
-See [`tabby-claude-status-plugin-2026.md`](https://notes.lvh.me/#/tabby-claude-status-plugin-2026.md) in the personal notes repo for a full new-machine setup walkthrough and troubleshooting.
-
 ## Upstream
 
 Forked from `tabby-claude-status-gse@1.0.1` (MIT, author `graphix`). The original repo is on a private GitLab (`git.gsat.us/GSE/tabby-claude-status`) and isn't publicly browsable — the only public artifact of the upstream is the npm tarball under `tabby-claude-status-gse`. This fork is published as `tabby-claude-status` on npm and developed openly in [this repo](https://github.com/steven-pribilinskiy/tabby-claude-status). Significant divergence from upstream: multi-backend TTS (Edge / Windows OneCore / Piper), display-surface toggles (emoji prefix, progress bar, taskbar flash & overlay), Haiku-narrated dynamic phrases, session restore, mic/Zoom-aware muting, sound-effect mode, activity log.

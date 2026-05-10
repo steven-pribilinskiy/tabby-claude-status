@@ -40,8 +40,8 @@ function normaliseSeparators(s: string): string {
 
 /**
  * Claude Code prints a statusline footer that looks like:
- *   Opus 4.7 (1M context)  default  112.6k  2hr 49m  48.0%  65.0%  33.8G/82.5G  5hr 27m  Session ID: 2c9a0909-e8c0-48cf-8cf0-d55bf501919a
- *   .claude ⎇ main 𖠰 main (+1066,-238) /home/stevenp/.claude
+ *   Opus 4.7 (1M context)  default  112.6k  2hr 49m  48.0%  65.0%  12.4G/64G  5hr 27m  Session ID: 00000000-0000-0000-0000-000000000000
+ *   .claude ⎇ main 𖠰 main (+1066,-238) /home/&lt;user&gt;/.claude
  * We extract what we can, per line, with forgiving regex.
  */
 export function deriveFromBuffer(raw: string): TabbyTabDerived {
