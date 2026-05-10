@@ -10,7 +10,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # for npm provenance attestations
+  id-token: write   # for npm Trusted Publishing (OIDC) + provenance attestations
 
 jobs:
   publish:
@@ -21,9 +21,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 24 ships with npm >= 11, which is required for Trusted Publishing
+      # (the OIDC handshake that lets `npm publish` authenticate without a
+      # long-lived NPM_TOKEN secret). Node 22 still ships with npm 10 and would
+      # reject the OIDC flow.
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: Verify tag matches package.json version
@@ -54,7 +58,10 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish to npm with provenance
+      # Trusted Publishing: npm CLI 11+ exchanges the workflow's GitHub OIDC
+      # token (granted by `id-token: write` above) for a short-lived publish
+      # credential. No NPM_TOKEN secret needed — npm verifies the publish came
+      # from this exact (owner, repo, workflow) tuple as configured at
+      # https://www.npmjs.com/package/tabby-claude-status/access.
+      - name: Publish to npm (Trusted Publishing + provenance)
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
