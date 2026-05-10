@@ -53,7 +53,7 @@
     "tabby-terminal": "*"
   },
   "devDependencies": {
-    "@angular/common": "^15.2.0",
+    "@angular/common": "^19.2.16",
     "@angular/core": "^15.2.0",
     "@angular/forms": "^15.2.0",
     "@rspack/cli": "^2.0.2",
