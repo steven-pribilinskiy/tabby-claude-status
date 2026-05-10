@@ -185,21 +185,35 @@ interface BackendOption {
             border: 1px solid transparent;
             color: var(--bs-body-color, inherit);
         }
+        /* Inside an alert, .text-muted and inline <code> need to inherit
+           the alert's body colour rather than the page-wide muted/code
+           colours — those are tuned for transparent body backgrounds and
+           render as low-contrast grey/pink on the tinted alert surface. */
+        .claude-alert .text-muted {
+            color: inherit;
+            opacity: 0.78;
+        }
+        .claude-alert code {
+            color: inherit;
+            background-color: rgba(0, 0, 0, 0.08);
+            padding: 0 0.25rem;
+            border-radius: 0.2rem;
+        }
         .claude-alert-success {
-            background-color: rgba(25, 135, 84, 0.15);
-            border-color: rgba(25, 135, 84, 0.45);
+            background-color: rgba(25, 135, 84, 0.20);
+            border-color: rgba(25, 135, 84, 0.55);
         }
         .claude-alert-warning {
-            background-color: rgba(255, 193, 7, 0.15);
-            border-color: rgba(255, 193, 7, 0.5);
+            background-color: rgba(255, 193, 7, 0.20);
+            border-color: rgba(255, 193, 7, 0.6);
         }
         .claude-alert-danger {
-            background-color: rgba(220, 53, 69, 0.15);
-            border-color: rgba(220, 53, 69, 0.5);
+            background-color: rgba(220, 53, 69, 0.20);
+            border-color: rgba(220, 53, 69, 0.6);
         }
         .claude-alert-info {
-            background-color: rgba(13, 110, 253, 0.15);
-            border-color: rgba(13, 110, 253, 0.45);
+            background-color: rgba(13, 110, 253, 0.20);
+            border-color: rgba(13, 110, 253, 0.55);
         }
 
         /* Hover-triggered help popover. The wrapper is the hover target so
@@ -611,6 +625,75 @@ interface BackendOption {
             </div>
 
             <div *ngIf="config.store.claudeStatus.audio.enabled">
+                <!-- ===== SHARED MUTE CONDITIONS =====
+                     Sits above the mode picker because mute behaviour
+                     applies regardless of which output mode is active. -->
+                <h6>Mute conditions</h6>
+                <p class="text-muted small">Suppress audio in contexts where it would interrupt voice work.</p>
+
+                <div class="form-group mb-3">
+                    <div class="toggle-row mb-1">
+                        <toggle
+                            [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomRecording"
+                            (ngModelChange)="save()"
+                        ></toggle>
+                        <label class="toggle-label"
+                               (click)="toggleField(config.store.claudeStatus.audio, 'muteDuringZoomRecording')">
+                            Mute while Zoom is recording
+                        </label>
+                    </div>
+                    <div class="form-text ms-4">
+                        Detected via recent writes in the Zoom recording folder.
+                    </div>
+                </div>
+
+                <div class="form-group mb-3">
+                    <div class="toggle-row mb-1">
+                        <toggle
+                            [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomMeeting"
+                            (ngModelChange)="save()"
+                        ></toggle>
+                        <label class="toggle-label"
+                               (click)="toggleField(config.store.claudeStatus.audio, 'muteDuringZoomMeeting')">
+                            Mute while in any Zoom meeting
+                        </label>
+                    </div>
+                    <div class="form-text ms-4">
+                        Detected via the Zoom.exe window title.
+                    </div>
+                </div>
+
+                <div class="form-group mb-3">
+                    <div class="toggle-row mb-1">
+                        <toggle
+                            [(ngModel)]="config.store.claudeStatus.audio.muteTtsDuringMicActive"
+                            (ngModelChange)="save()"
+                        ></toggle>
+                        <label class="toggle-label"
+                               (click)="toggleField(config.store.claudeStatus.audio, 'muteTtsDuringMicActive')">
+                            Mute TTS while microphone is in use (any app)
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group mb-3">
+                    <div class="toggle-row mb-1">
+                        <toggle
+                            [(ngModel)]="config.store.claudeStatus.audio.muteSoundDuringMicActive"
+                            (ngModelChange)="save()"
+                        ></toggle>
+                        <label class="toggle-label"
+                               (click)="toggleField(config.store.claudeStatus.audio, 'muteSoundDuringMicActive')">
+                            Mute sound effects while microphone is in use (any app)
+                        </label>
+                    </div>
+                    <div class="form-text ms-4">
+                        Mic detection covers Zoom, Teams, Discord, Windows Voice Access,
+                        browser voice input, dictation tools, etc. — read from the same
+                        registry that powers Settings → Privacy → Microphone.
+                    </div>
+                </div>
+
                 <div class="form-group mb-3">
                     <label class="form-label">Output mode</label>
                     <div class="d-flex gap-3">
@@ -801,10 +884,18 @@ interface BackendOption {
                         </div>
                         <div class="col-4">
                             <label class="form-label">Max output tokens</label>
-                            <input type="number" class="form-control"
-                                   [(ngModel)]="config.store.claudeStatus.audio.dynamic.maxOutputTokens"
-                                   (ngModelChange)="save()"
-                                   min="8" max="128" step="4" />
+                            <select class="form-control"
+                                    [(ngModel)]="config.store.claudeStatus.audio.dynamic.maxOutputTokens"
+                                    (ngModelChange)="save()">
+                                <option [ngValue]="16">16 — terse (one short sentence)</option>
+                                <option [ngValue]="24">24 — short</option>
+                                <option [ngValue]="32">32 — default (1–2 sentences)</option>
+                                <option [ngValue]="48">48 — medium</option>
+                                <option [ngValue]="64">64 — long</option>
+                                <option [ngValue]="96">96 — verbose</option>
+                                <option [ngValue]="128">128 — max (longest spoken phrase)</option>
+                            </select>
+                            <div class="form-text small">Caps the model's reply length per phrase.</div>
                         </div>
                         <div class="col-4">
                             <label class="form-label">Timeout (ms)</label>
@@ -1203,73 +1294,6 @@ interface BackendOption {
                         </div>
                     </div>
                 </div><!-- /sound mode -->
-
-                <!-- ===== SHARED MUTE CONDITIONS ===== -->
-                <h6 class="mt-4">Mute conditions</h6>
-                <p class="text-muted small">Suppress audio in contexts where it would interrupt voice work.</p>
-
-                <div class="form-group mb-3">
-                    <div class="toggle-row mb-1">
-                        <toggle
-                            [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomRecording"
-                            (ngModelChange)="save()"
-                        ></toggle>
-                        <label class="toggle-label"
-                               (click)="toggleField(config.store.claudeStatus.audio, 'muteDuringZoomRecording')">
-                            Mute while Zoom is recording
-                        </label>
-                    </div>
-                    <div class="form-text ms-4">
-                        Detected via recent writes in the Zoom recording folder.
-                    </div>
-                </div>
-
-                <div class="form-group mb-3">
-                    <div class="toggle-row mb-1">
-                        <toggle
-                            [(ngModel)]="config.store.claudeStatus.audio.muteDuringZoomMeeting"
-                            (ngModelChange)="save()"
-                        ></toggle>
-                        <label class="toggle-label"
-                               (click)="toggleField(config.store.claudeStatus.audio, 'muteDuringZoomMeeting')">
-                            Mute while in any Zoom meeting
-                        </label>
-                    </div>
-                    <div class="form-text ms-4">
-                        Detected via the Zoom.exe window title.
-                    </div>
-                </div>
-
-                <div class="form-group mb-3">
-                    <div class="toggle-row mb-1">
-                        <toggle
-                            [(ngModel)]="config.store.claudeStatus.audio.muteTtsDuringMicActive"
-                            (ngModelChange)="save()"
-                        ></toggle>
-                        <label class="toggle-label"
-                               (click)="toggleField(config.store.claudeStatus.audio, 'muteTtsDuringMicActive')">
-                            Mute TTS while microphone is in use (any app)
-                        </label>
-                    </div>
-                </div>
-
-                <div class="form-group mb-3">
-                    <div class="toggle-row mb-1">
-                        <toggle
-                            [(ngModel)]="config.store.claudeStatus.audio.muteSoundDuringMicActive"
-                            (ngModelChange)="save()"
-                        ></toggle>
-                        <label class="toggle-label"
-                               (click)="toggleField(config.store.claudeStatus.audio, 'muteSoundDuringMicActive')">
-                            Mute sound effects while microphone is in use (any app)
-                        </label>
-                    </div>
-                    <div class="form-text ms-4">
-                        Mic detection covers Zoom, Teams, Discord, Windows Voice Access,
-                        browser voice input, dictation tools, etc. — read from the same
-                        registry that powers Settings → Privacy → Microphone.
-                    </div>
-                </div>
             </div><!-- /audio.enabled -->
 
             <!-- ===== ONLINE CATALOG MODAL ===== -->
