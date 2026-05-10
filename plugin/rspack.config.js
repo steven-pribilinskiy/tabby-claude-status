@@ -1,5 +1,6 @@
 const path = require('path')
 
+/** @type {import('@rspack/core').Configuration} */
 module.exports = {
   target: 'node',
   entry: './src/index.ts',
@@ -21,9 +22,25 @@ module.exports = {
     rules: [
       {
         test: /\.ts$/,
-        loader: 'ts-loader',
+        exclude: /node_modules/,
+        // Rspack ships SWC under the `builtin:swc-loader` virtual loader id —
+        // no extra package install needed. Angular's `@NgModule` / `@Injectable`
+        // / `@Component` decorators rely on legacy decorator + emitDecoratorMetadata
+        // semantics, so we enable both explicitly.
+        loader: 'builtin:swc-loader',
         options: {
-          transpileOnly: true,
+          jsc: {
+            parser: {
+              syntax: 'typescript',
+              decorators: true,
+            },
+            transform: {
+              legacyDecorator: true,
+              decoratorMetadata: true,
+            },
+            target: 'es2022',
+          },
+          sourceMaps: true,
         },
       },
     ],

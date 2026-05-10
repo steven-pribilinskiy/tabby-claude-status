@@ -99,7 +99,7 @@ src/
 assets/
   overlay-working.png  overlay-question.png  overlay-done.png  overlay-error.png
 hook.js                                   Cross-platform Claude Code hook script
-webpack.config.js                         Build (UMD, node target, tabby externals)
+rspack.config.js                          Build (UMD, node target, tabby externals); SWC handles TS via builtin:swc-loader
 tsconfig.json
 scripts/install-plugin.js                 Copies build output into Tabby's plugin dir
 ```

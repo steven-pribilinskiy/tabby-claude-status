@@ -1,6 +1,6 @@
 {
   "name": "tabby-claude-status",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Visual tab indicators (color, emoji, progress, taskbar flash) and multi-backend TTS for Claude Code status inside Tabby terminal",
   "keywords": [
     "tabby-plugin",
@@ -32,13 +32,14 @@
     "README.md"
   ],
   "scripts": {
-    "build": "webpack --mode production",
-    "watch": "webpack --mode development --watch",
+    "build": "rspack build --mode=production",
+    "watch": "rspack build --mode=development --watch",
+    "typecheck": "tsgo --noEmit",
     "install-plugin": "npm run build && node scripts/install-plugin.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.68.0",
+    "@anthropic-ai/sdk": "^0.95.1",
     "msedge-tts": "^2.0.5"
   },
   "peerDependencies": {
@@ -55,15 +56,14 @@
     "@angular/common": "^15.2.0",
     "@angular/core": "^15.2.0",
     "@angular/forms": "^15.2.0",
-    "@types/node": "^20.0.0",
+    "@rspack/cli": "^2.0.2",
+    "@rspack/core": "^2.0.2",
+    "@types/node": "^25.6.2",
+    "@typescript/native-preview": "^7.0.0-dev.20260510.1",
     "rxjs": "^7.8.0",
     "tabby-core": "^1.0.163",
     "tabby-local": "^1.0.163",
     "tabby-settings": "^1.0.163",
-    "tabby-terminal": "^1.0.163",
-    "ts-loader": "^9.5.0",
-    "typescript": "~4.9.0",
-    "webpack": "^5.90.0",
-    "webpack-cli": "^5.1.0"
+    "tabby-terminal": "^1.0.163"
   }
 }

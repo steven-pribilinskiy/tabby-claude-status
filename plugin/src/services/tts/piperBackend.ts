@@ -119,7 +119,13 @@ export class PiperBackend implements TtsBackend {
             throw new Error(`piper produced an empty/too-small WAV (${wav.length} bytes)`)
         }
 
-        const blob = new Blob([wav], { type: 'audio/wav' })
+        // `wav` is a Node Buffer (subclass of Uint8Array). @types/node@25
+        // narrows Buffer's underlying ArrayBuffer to `ArrayBufferLike`
+        // (= ArrayBuffer | SharedArrayBuffer), which is no longer assignable
+        // to BlobPart's expected ArrayBufferView<ArrayBuffer>. Wrapping in a
+        // fresh Uint8Array gives the type system the ArrayBuffer it wants
+        // without copying bytes — Uint8Array shares the backing storage.
+        const blob = new Blob([new Uint8Array(wav)], { type: 'audio/wav' })
         const url = URL.createObjectURL(blob)
 
         this.cancel()
