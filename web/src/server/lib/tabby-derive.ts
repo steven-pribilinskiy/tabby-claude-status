@@ -64,9 +64,7 @@ export function deriveFromBuffer(raw: string): TabbyTabDerived {
 	// stats tuple — rejects stray mentions of ⎇/𖠰 in quoted text (including
 	// regex literals like this one in scrollback).
 	const statusLineIdx = findLastIndex(lines, (l) =>
-		/⎇\s+[A-Za-z0-9_./+-]+\s+𖠰\s+[A-Za-z0-9_./+-]+.*\([+-][0-9,]+,[+-][0-9,]+\)/.test(
-			l,
-		),
+		/⎇\s+[A-Za-z0-9_./+-]+\s+𖠰\s+[A-Za-z0-9_./+-]+.*\([+-][0-9,]+,[+-][0-9,]+\)/.test(l),
 	);
 
 	if (statusLineIdx >= 0) {
@@ -79,9 +77,7 @@ export function deriveFromBuffer(raw: string): TabbyTabDerived {
 		if (diffMatch) derived.diffStats = diffMatch[1];
 		// cwd is the last absolute-looking path on the statusline. Greedy-stop
 		// on whitespace, pipe, box-drawing, or ellipsis.
-		const cwdMatches = [
-			...line.matchAll(/(\/(?:home|Users|mnt|root)\/[^\s│|]+)/g),
-		];
+		const cwdMatches = [...line.matchAll(/(\/(?:home|Users|mnt|root)\/[^\s│|]+)/g)];
 		if (cwdMatches.length) {
 			let cwd = cwdMatches[cwdMatches.length - 1][1];
 			// The footer truncates long paths with "…" — record the best we got.
@@ -89,9 +85,7 @@ export function deriveFromBuffer(raw: string): TabbyTabDerived {
 			derived.cwd = cwd;
 		}
 		// Project name: first non-whitespace token on the line before `⎇`.
-		const projectMatch = line.match(
-			/(?:^|\s|│)([.A-Za-z0-9_-][.A-Za-z0-9_-]*)\s+⎇/,
-		);
+		const projectMatch = line.match(/(?:^|\s|│)([.A-Za-z0-9_-][.A-Za-z0-9_-]*)\s+⎇/);
 		if (projectMatch) derived.projectName = projectMatch[1];
 	}
 
@@ -99,9 +93,7 @@ export function deriveFromBuffer(raw: string): TabbyTabDerived {
 		const line = lines[sessionIdLineIdx];
 		const idMatch = line.match(/Session ID:\s*([a-f0-9][a-f0-9-]{7,})/i);
 		if (idMatch) derived.claudeSessionId = idMatch[1];
-		const modelMatch = line.match(
-			/\b(Opus|Sonnet|Haiku)\s+[0-9.]+(?:\s*\([^)]*\))?/,
-		);
+		const modelMatch = line.match(/\b(Opus|Sonnet|Haiku)\s+[0-9.]+(?:\s*\([^)]*\))?/);
 		if (modelMatch) derived.model = modelMatch[0];
 
 		// Context-window usage like "119.3k". The model's label already
@@ -119,8 +111,7 @@ export function deriveFromBuffer(raw: string): TabbyTabDerived {
 
 		// Percentages like "58.0%  66.0%" — session + weekly usage.
 		const pctMatches = [...line.matchAll(/\b(\d+(?:\.\d+)?%)/g)];
-		if (pctMatches.length > 0)
-			derived.usagePct = pctMatches.map((m) => m[1]).slice(0, 2);
+		if (pctMatches.length > 0) derived.usagePct = pctMatches.map((m) => m[1]).slice(0, 2);
 
 		// Mode sits between model and the first k-token or %.
 		// The statusline renders `<model>  <mode>  <tokens>  ...` separated by
@@ -171,8 +162,7 @@ export function deriveFromBuffer(raw: string): TabbyTabDerived {
 			let recap = m[1].trim();
 			for (let j = i + 1; j < Math.min(lines.length, i + 4); j++) {
 				const cont = lines[j].trim();
-				if (!cont || /^[─━-]+/.test(cont) || /^❯/.test(cont) || /^●/.test(cont))
-					break;
+				if (!cont || /^[─━-]+/.test(cont) || /^❯/.test(cont) || /^●/.test(cont)) break;
 				recap += ` ${cont}`;
 			}
 			derived.recap = normaliseSpaces(recap).slice(0, 500);
@@ -235,10 +225,7 @@ function clip(s: string, max = 240): string {
 	return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
-function findLastIndex<T>(
-	arr: T[],
-	pred: (v: T, i: number) => boolean,
-): number {
+function findLastIndex<T>(arr: T[], pred: (v: T, i: number) => boolean): number {
 	for (let i = arr.length - 1; i >= 0; i--) {
 		if (pred(arr[i], i)) return i;
 	}

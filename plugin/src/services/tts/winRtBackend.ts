@@ -1,5 +1,5 @@
-import { spawn } from 'child_process'
-import { TtsBackend, TtsSpeakParams, TtsVoice } from './tts.interface'
+import { spawn } from 'node:child_process'
+import type { TtsBackend, TtsSpeakParams, TtsVoice } from './tts.interface'
 
 /**
  * Uses Windows Runtime `Windows.Media.SpeechSynthesis` via PowerShell.
@@ -109,32 +109,48 @@ export class WinRtBackend implements TtsBackend {
         `
 
         this.cancel()
-        this.currentProcess = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
-            windowsHide: true,
-        })
-        this.currentProcess.on('error', err => {
+        this.currentProcess = spawn(
+            'powershell.exe',
+            ['-NoProfile', '-NonInteractive', '-Command', ps],
+            {
+                windowsHide: true,
+            },
+        )
+        this.currentProcess.on('error', (err) => {
             console.error('[claude-status] WinRT speak spawn error:', err)
         })
     }
 
     cancel(): void {
         if (this.currentProcess) {
-            try { this.currentProcess.kill() } catch { /* already dead */ }
+            try {
+                this.currentProcess.kill()
+            } catch {
+                /* already dead */
+            }
             this.currentProcess = null
         }
     }
 
     private runPowerShell(script: string): Promise<string> {
         return new Promise((resolve, reject) => {
-            const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-                windowsHide: true,
-            })
+            const proc = spawn(
+                'powershell.exe',
+                ['-NoProfile', '-NonInteractive', '-Command', script],
+                {
+                    windowsHide: true,
+                },
+            )
             let stdout = ''
             let stderr = ''
-            proc.stdout.on('data', d => { stdout += d.toString() })
-            proc.stderr.on('data', d => { stderr += d.toString() })
+            proc.stdout.on('data', (d) => {
+                stdout += d.toString()
+            })
+            proc.stderr.on('data', (d) => {
+                stderr += d.toString()
+            })
             proc.on('error', reject)
-            proc.on('close', code => {
+            proc.on('close', (code) => {
                 if (code === 0) resolve(stdout.trim())
                 else reject(new Error(`powershell exited ${code}: ${stderr}`))
             })

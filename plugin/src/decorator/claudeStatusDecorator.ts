@@ -1,21 +1,20 @@
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { Injectable } from '@angular/core'
-import { AppService } from 'tabby-core'
-import { TerminalDecorator, BaseTerminalTabComponent } from 'tabby-terminal'
-import { StatusParserService } from '../services/statusParserService'
-import { ClaudeStatusConfigService } from '../services/configService'
-import { AudioService } from '../services/audioService'
-import { SessionRestoreService } from '../services/sessionRestoreService'
-import { StatusActivityLogService } from '../services/statusActivityLogService'
+import type { AppService } from 'tabby-core'
+import { type BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import {
-    ClaudeStatusName,
-    ClaudeStatusEvent,
+    type ClaudeStatusDisplayConfig,
+    type ClaudeStatusEvent,
+    type ClaudeStatusName,
     HOOK_EVENT_STATUS_MAP,
-    ClaudeStatusDisplayConfig,
 } from '../interfaces/types'
-
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
+import type { AudioService } from '../services/audioService'
+import type { ClaudeStatusConfigService } from '../services/configService'
+import type { SessionRestoreService } from '../services/sessionRestoreService'
+import type { StatusActivityLogService } from '../services/statusActivityLogService'
+import type { StatusParserService } from '../services/statusParserService'
 
 const STATUS_FILE = path.join(os.tmpdir(), 'tabby-claude-status.json')
 
@@ -57,7 +56,8 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
 
     // Display-surface bookkeeping per terminal
     private baseTitles: Map<BaseTerminalTabComponent, string> = new Map()
-    private progressIntervals: Map<BaseTerminalTabComponent, ReturnType<typeof setInterval>> = new Map()
+    private progressIntervals: Map<BaseTerminalTabComponent, ReturnType<typeof setInterval>> =
+        new Map()
 
     constructor(
         private parser: StatusParserService,
@@ -94,14 +94,14 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         const restoreCfg = this.configService.getSessionRestoreConfig()
         if (restoreCfg.enabled && restoreCfg.autoResumeOnLaunch) {
             setTimeout(() => {
-                this.sessionRestore.resumeAll().then(n => {
+                this.sessionRestore.resumeAll().then((n) => {
                     if (n > 0) this.configService.debug(`Auto-resumed ${n} Claude sessions`)
                 })
             }, 1500)
         }
 
         if (this.configService.clearOnFocus) {
-            this.app.activeTabChange$.subscribe(tab => {
+            this.app.activeTabChange$.subscribe((tab) => {
                 for (const terminal of this.terminals) {
                     if (terminal === tab || (terminal as any).parent === tab) {
                         this.clearStatus(terminal)
@@ -120,7 +120,9 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         if (typeof window !== 'undefined') {
             window.addEventListener(
                 'beforeunload',
-                () => { this.isShuttingDown = true },
+                () => {
+                    this.isShuttingDown = true
+                },
                 { capture: true },
             )
         }
@@ -193,8 +195,10 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                     this.configService.debug('Cached terminal PID:', pid)
                     return
                 }
-            } catch (_) { /* retry */ }
-            await new Promise(r => setTimeout(r, 1000))
+            } catch (_) {
+                /* retry */
+            }
+            await new Promise((r) => setTimeout(r, 1000))
         }
     }
 
@@ -328,8 +332,10 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         if (ancestors.length > 0 && this.terminalPids.size > 0) {
             const cachedPids = Array.from(this.terminalPids.values())
             this.configService.debug(
-                'PID match: ancestors=', ancestors.join(','),
-                '| cached terminal PIDs=', cachedPids.join(','),
+                'PID match: ancestors=',
+                ancestors.join(','),
+                '| cached terminal PIDs=',
+                cachedPids.join(','),
             )
             for (const [terminal, cachedPid] of this.terminalPids) {
                 if (ancestors.includes(cachedPid)) {
@@ -341,8 +347,10 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             this.configService.debug('PID match: no match found, falling back to all terminals')
         } else {
             this.configService.debug(
-                'PID match: skipped — ancestors=', ancestors.length,
-                'cached count=', this.terminalPids.size,
+                'PID match: skipped — ancestors=',
+                ancestors.length,
+                'cached count=',
+                this.terminalPids.size,
             )
         }
 
@@ -391,7 +399,11 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             // Still record so the activity log shows why the user did NOT hear
             // anything for this event.
             const id = this.activityLog.record(logBase)
-            this.activityLog.setAudioOutcome(id, 'suppressed-duplicate', 'working while still in question')
+            this.activityLog.setAudioOutcome(
+                id,
+                'suppressed-duplicate',
+                'working while still in question',
+            )
             return
         }
 
@@ -493,7 +505,11 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         const next = emoji ? `${emoji} ${base}` : base
 
         if (currentTitle !== next) {
-            try { terminal.setTitle(next) } catch { /* older Tabby may not expose setTitle */ }
+            try {
+                terminal.setTitle(next)
+            } catch {
+                /* older Tabby may not expose setTitle */
+            }
         }
     }
 
@@ -509,7 +525,11 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
     private restoreTitle(terminal: BaseTerminalTabComponent): void {
         const base = this.baseTitles.get(terminal)
         if (base !== undefined) {
-            try { terminal.setTitle(base) } catch { /* noop */ }
+            try {
+                terminal.setTitle(base)
+            } catch {
+                /* noop */
+            }
             this.baseTitles.delete(terminal)
         }
     }
@@ -522,7 +542,11 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         this.stopProgressAnimation(terminal)
 
         if (!display.progressBar) {
-            try { terminal.setProgress(null) } catch { /* noop */ }
+            try {
+                terminal.setProgress(null)
+            } catch {
+                /* noop */
+            }
             return
         }
 
@@ -532,11 +556,19 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             const iv = setInterval(() => {
                 tick = (tick + 1) % 30
                 const value = tick / 30
-                try { terminal.setProgress(value) } catch { /* noop */ }
+                try {
+                    terminal.setProgress(value)
+                } catch {
+                    /* noop */
+                }
             }, 50)
             this.progressIntervals.set(terminal, iv)
         } else {
-            try { terminal.setProgress(null) } catch { /* noop */ }
+            try {
+                terminal.setProgress(null)
+            } catch {
+                /* noop */
+            }
         }
     }
 
@@ -545,7 +577,11 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         if (iv) {
             clearInterval(iv)
             this.progressIntervals.delete(terminal)
-            try { terminal.setProgress(null) } catch { /* noop */ }
+            try {
+                terminal.setProgress(null)
+            } catch {
+                /* noop */
+            }
         }
     }
 
@@ -555,7 +591,11 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         display: ClaudeStatusDisplayConfig,
     ): void {
         if (!display.activityMarker) {
-            try { terminal.clearActivity() } catch { /* noop */ }
+            try {
+                terminal.clearActivity()
+            } catch {
+                /* noop */
+            }
             return
         }
 
@@ -565,7 +605,9 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             } else {
                 terminal.clearActivity()
             }
-        } catch { /* older Tabby */ }
+        } catch {
+            /* older Tabby */
+        }
     }
 
     private applyTaskbar(status: ClaudeStatusName, display: ClaudeStatusDisplayConfig): void {
@@ -578,7 +620,11 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         const focused = typeof win.isFocused === 'function' ? win.isFocused() : true
 
         if (display.taskbarFlash && !focused) {
-            try { win.flashFrame?.(status === 'question' || status === 'error') } catch { /* noop */ }
+            try {
+                win.flashFrame?.(status === 'question' || status === 'error')
+            } catch {
+                /* noop */
+            }
         }
 
         if (display.taskbarOverlay) {
@@ -591,7 +637,9 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                         win.setOverlayIcon?.(iconPath, status)
                     }
                 }
-            } catch { /* noop */ }
+            } catch {
+                /* noop */
+            }
         }
     }
 
@@ -606,7 +654,10 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         }
     }
 
-    private setColorWithScrollGuard(terminal: BaseTerminalTabComponent, color: string | null): void {
+    private setColorWithScrollGuard(
+        terminal: BaseTerminalTabComponent,
+        color: string | null,
+    ): void {
         const frontend = terminal.frontend as any
         const xterm = frontend?.xterm
 
@@ -668,11 +719,19 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         this.stopProgressAnimation(terminal)
         if (display.titleEmoji) this.restoreTitle(terminal)
         if (display.activityMarker) {
-            try { terminal.clearActivity() } catch { /* noop */ }
+            try {
+                terminal.clearActivity()
+            } catch {
+                /* noop */
+            }
         }
         if (display.taskbarOverlay) {
             const win = getBrowserWindow()
-            try { win?.setOverlayIcon?.(null, '') } catch { /* noop */ }
+            try {
+                win?.setOverlayIcon?.(null, '')
+            } catch {
+                /* noop */
+            }
         }
     }
 }

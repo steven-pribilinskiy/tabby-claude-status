@@ -14,11 +14,7 @@ interface Options {
 	manual?: boolean;
 }
 
-export function useCachedEndpoint<T = unknown>(
-	key: string,
-	url: string,
-	options: Options = {},
-) {
+export function useCachedEndpoint<T = unknown>(key: string, url: string, options: Options = {}) {
 	const data = useStore((s) => s.cache[key]?.data ?? null) as T | null;
 	const fetchedAt = useStore((s) => s.cache[key]?.fetchedAt ?? 0);
 	const loading = useStore((s) => s.cache[key]?.loading ?? false);
@@ -32,8 +28,7 @@ export function useCachedEndpoint<T = unknown>(
 	}, [key, url, fetchEndpoint]);
 
 	const stale =
-		fetchedAt === 0 ||
-		(effectiveInterval > 0 && Date.now() - fetchedAt > effectiveInterval);
+		fetchedAt === 0 || (effectiveInterval > 0 && Date.now() - fetchedAt > effectiveInterval);
 
 	// Initial fetch — when never fetched or stale beyond the interval
 	useEffect(() => {

@@ -1,6 +1,5 @@
+import * as fs from 'node:fs'
 import { Injectable } from '@angular/core'
-
-import * as fs from 'fs'
 
 export interface TranscriptTail {
     /** Plain-text last assistant message, or '' if not found. */
@@ -61,7 +60,7 @@ export class TranscriptReaderService {
             return empty
         }
 
-        const lines = buffer.split('\n').filter(l => l.length > 0)
+        const lines = buffer.split('\n').filter((l) => l.length > 0)
         const result: TranscriptTail = { lastAssistant: '', lastUserPrompt: '' }
 
         for (let i = lines.length - 1; i >= 0; i--) {
@@ -109,10 +108,12 @@ export class TranscriptReaderService {
         if (words.length === 0) return null
         const trimmed = words.slice(0, maxWords).join(' ')
         // Strip surrounding quotes / leading filler words that don't read well aloud.
-        return trimmed
-            .replace(/^["'`*_]+|["'`*_]+$/g, '')
-            .replace(/^(okay|ok|sure|alright|so|well),?\s+/i, '')
-            .trim() || null
+        return (
+            trimmed
+                .replace(/^["'`*_]+|["'`*_]+$/g, '')
+                .replace(/^(okay|ok|sure|alright|so|well),?\s+/i, '')
+                .trim() || null
+        )
     }
 
     private extractText(content: unknown, skipToolResults = false): string {

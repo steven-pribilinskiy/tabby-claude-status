@@ -1,5 +1,10 @@
 import { Injectable } from '@angular/core'
-import { ClaudeStatusEvent, ClaudeStatusMetadata, ClaudeStatusName, ParseResult } from '../interfaces/types'
+import type {
+    ClaudeStatusEvent,
+    ClaudeStatusMetadata,
+    ClaudeStatusName,
+    ParseResult,
+} from '../interfaces/types'
 
 /**
  * Service for parsing Claude status escape sequences from terminal output
@@ -51,7 +56,7 @@ export class StatusParserService {
                 // v2: statusStr is a raw event name, not a mapped status
                 events.push({
                     version,
-                    status: 'idle',  // placeholder; decorator maps via HOOK_EVENT_STATUS_MAP
+                    status: 'idle', // placeholder; decorator maps via HOOK_EVENT_STATUS_MAP
                     eventName: statusStr,
                     metadata,
                 })
@@ -110,7 +115,11 @@ export class StatusParserService {
     /**
      * Create an escape sequence for a given status (useful for testing)
      */
-    createEscapeSequence(status: ClaudeStatusName, metadata: ClaudeStatusMetadata = {}, version = 1): string {
+    createEscapeSequence(
+        status: ClaudeStatusName,
+        metadata: ClaudeStatusMetadata = {},
+        version = 1,
+    ): string {
         const metadataStr = JSON.stringify(metadata)
         return `\x1b]777;claude-status;${version};${status};${metadataStr}\x07`
     }

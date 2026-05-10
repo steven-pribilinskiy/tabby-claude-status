@@ -1,10 +1,10 @@
+import { spawn } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as https from 'node:https'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { URL } from 'node:url'
 import { Injectable } from '@angular/core'
-import { spawn } from 'child_process'
-import * as fs from 'fs'
-import * as https from 'https'
-import * as os from 'os'
-import * as path from 'path'
-import { URL } from 'url'
 
 export interface PiperInstallPaths {
     installDir: string
@@ -56,8 +56,7 @@ const DEFAULT_MODEL_NAME = 'en_US-lessac-medium'
 // Hugging Face hosts the voice models in a public repo originally maintained
 // by rhasspy. Models are still hosted there and remain compatible with the
 // piper1-gpl successor.
-const MODEL_BASE =
-    'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium'
+const MODEL_BASE = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium'
 
 /**
  * Installs Piper TTS locally for the user.
@@ -118,7 +117,9 @@ export class PiperInstallerService {
     isInstalled(): boolean {
         const { exePath, modelPath, modelJsonPath } = this.getInstallPaths()
         try {
-            return fs.existsSync(exePath) && fs.existsSync(modelPath) && fs.existsSync(modelJsonPath)
+            return (
+                fs.existsSync(exePath) && fs.existsSync(modelPath) && fs.existsSync(modelJsonPath)
+            )
         } catch {
             return false
         }
@@ -140,11 +141,11 @@ export class PiperInstallerService {
     }
 
     private commandExists(name: string): Promise<boolean> {
-        return new Promise(resolve => {
+        return new Promise((resolve) => {
             const which = process.platform === 'win32' ? 'where' : 'which'
             const proc = spawn(which, [name], { windowsHide: true, stdio: 'ignore' })
             proc.on('error', () => resolve(false))
-            proc.on('close', code => resolve(code === 0))
+            proc.on('close', (code) => resolve(code === 0))
         })
     }
 
@@ -207,11 +208,7 @@ export class PiperInstallerService {
         // 2. Create venv. `python -m venv` is idempotent — re-running is fine,
         //    it just refreshes pyvenv.cfg.
         onProgress({ phase: 'create-venv', message: 'Creating Python virtual environment…' })
-        await this.runStream(
-            python.exe,
-            [...python.args, '-m', 'venv', paths.venvDir],
-            'venv',
-        )
+        await this.runStream(python.exe, [...python.args, '-m', 'venv', paths.venvDir], 'venv')
 
         // 3. Pip-install (or upgrade) piper-tts into the venv. Using the venv's
         //    own python ensures we never touch the system site-packages.
@@ -288,8 +285,8 @@ export class PiperInstallerService {
         const result: PiperVoiceCatalogEntry[] = []
         for (const [key, v] of Object.entries(obj)) {
             const files = v?.files || {}
-            const onnxRel = Object.keys(files).find(p => p.endsWith('.onnx'))
-            const jsonRel = Object.keys(files).find(p => p.endsWith('.onnx.json'))
+            const onnxRel = Object.keys(files).find((p) => p.endsWith('.onnx'))
+            const jsonRel = Object.keys(files).find((p) => p.endsWith('.onnx.json'))
             if (!onnxRel || !jsonRel) continue
             const lang = v.language || {}
             result.push({
@@ -375,11 +372,15 @@ export class PiperInstallerService {
             if (!fs.existsSync(modelsDir)) return []
             return fs
                 .readdirSync(modelsDir)
-                .filter(f => f.endsWith('.onnx'))
-                .map(f => {
+                .filter((f) => f.endsWith('.onnx'))
+                .map((f) => {
                     const full = path.join(modelsDir, f)
                     let size = 0
-                    try { size = fs.statSync(full).size } catch { /* ignore */ }
+                    try {
+                        size = fs.statSync(full).size
+                    } catch {
+                        /* ignore */
+                    }
                     return {
                         key: path.basename(f, '.onnx'),
                         modelPath: full,
@@ -395,10 +396,12 @@ export class PiperInstallerService {
     /** Plain-text GET that follows redirects, used for the catalog JSON. */
     private httpGetText(url: string): Promise<string> {
         return new Promise((resolve, reject) => {
-            this.httpGet(url, res => {
+            this.httpGet(url, (res) => {
                 let buf = ''
                 res.setEncoding('utf-8')
-                res.on('data', c => { buf += c })
+                res.on('data', (c) => {
+                    buf += c
+                })
                 res.on('end', () => resolve(buf))
                 res.on('error', reject)
             }).catch(reject)
@@ -415,11 +418,16 @@ export class PiperInstallerService {
             const proc = spawn(exe, args, { windowsHide: true })
             let stdout = ''
             let stderr = ''
-            proc.stdout.on('data', d => { stdout += d.toString() })
-            proc.stderr.on('data', d => { stderr += d.toString() })
+            proc.stdout.on('data', (d) => {
+                stdout += d.toString()
+            })
+            proc.stderr.on('data', (d) => {
+                stderr += d.toString()
+            })
             proc.on('error', reject)
-            proc.on('close', code => {
-                if (code === 0) resolve(stdout + stderr) // some versions of python print to stderr
+            proc.on('close', (code) => {
+                if (code === 0)
+                    resolve(stdout + stderr) // some versions of python print to stderr
                 else reject(new Error(`${exe} ${args.join(' ')} exited ${code}: ${stderr.trim()}`))
             })
         })
@@ -435,10 +443,14 @@ export class PiperInstallerService {
             const proc = spawn(exe, args, { windowsHide: true })
             let stderr = ''
             let stdout = ''
-            proc.stdout.on('data', d => { stdout += d.toString() })
-            proc.stderr.on('data', d => { stderr += d.toString() })
+            proc.stdout.on('data', (d) => {
+                stdout += d.toString()
+            })
+            proc.stderr.on('data', (d) => {
+                stderr += d.toString()
+            })
             proc.on('error', reject)
-            proc.on('close', code => {
+            proc.on('close', (code) => {
                 if (code === 0) {
                     resolve()
                 } else {
@@ -455,16 +467,16 @@ export class PiperInstallerService {
         onProgress: (bytesReceived: number, bytesTotal: number) => void,
     ): Promise<void> {
         return new Promise((resolve, reject) => {
-            this.httpGet(url, res => {
+            this.httpGet(url, (res) => {
                 const total = Number(res.headers['content-length'] || 0)
                 let received = 0
                 const file = fs.createWriteStream(destPath)
-                res.on('data', c => {
+                res.on('data', (c) => {
                     received += c.length
                     onProgress(received, total)
                 })
                 res.pipe(file)
-                file.on('finish', () => file.close(err => (err ? reject(err) : resolve())))
+                file.on('finish', () => file.close((err) => (err ? reject(err) : resolve())))
                 file.on('error', reject)
                 res.on('error', reject)
             }).catch(reject)
@@ -495,8 +507,13 @@ export class PiperInstallerService {
                         Accept: '*/*',
                     },
                 },
-                res => {
-                    if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                (res) => {
+                    if (
+                        res.statusCode &&
+                        res.statusCode >= 300 &&
+                        res.statusCode < 400 &&
+                        res.headers.location
+                    ) {
                         const next = new URL(res.headers.location, url).toString()
                         res.resume()
                         this.httpGet(next, cb, depth + 1).then(resolve, reject)
@@ -525,10 +542,15 @@ function fmtBytes(n: number): string {
 /** Order qualities low → medium → high → x_low so the catalog UI groups sanely. */
 function qualityRank(q: string): number {
     switch ((q || '').toLowerCase()) {
-        case 'x_low': return 0
-        case 'low': return 1
-        case 'medium': return 2
-        case 'high': return 3
-        default: return 4
+        case 'x_low':
+            return 0
+        case 'low':
+            return 1
+        case 'medium':
+            return 2
+        case 'high':
+            return 3
+        default:
+            return 4
     }
 }

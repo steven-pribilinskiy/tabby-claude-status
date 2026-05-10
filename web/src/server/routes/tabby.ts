@@ -49,8 +49,7 @@ app.post("/mcp/:tool", async (c) => {
 	let args: Record<string, unknown> = {};
 	try {
 		const body = await c.req.json().catch(() => null);
-		if (body && typeof body === "object")
-			args = body as Record<string, unknown>;
+		if (body && typeof body === "object") args = body as Record<string, unknown>;
 	} catch {
 		// empty body is fine
 	}
@@ -90,16 +89,10 @@ app.post("/live/tabs/:tabId/split", async (c) => {
 		}),
 	);
 });
-app.post("/live/tabs/close-all", async (c) =>
-	c.json(await tabbyMcp.closeAllTabs()),
-);
+app.post("/live/tabs/close-all", async (c) => c.json(await tabbyMcp.closeAllTabs()));
 app.post("/live/tabs/next", async (c) => c.json(await tabbyMcp.nextTab()));
-app.post("/live/tabs/previous", async (c) =>
-	c.json(await tabbyMcp.previousTab()),
-);
-app.post("/live/tabs/reopen-last", async (c) =>
-	c.json(await tabbyMcp.reopenLastTab()),
-);
+app.post("/live/tabs/previous", async (c) => c.json(await tabbyMcp.previousTab()));
+app.post("/live/tabs/reopen-last", async (c) => c.json(await tabbyMcp.reopenLastTab()));
 app.post("/live/tabs/:tabId/focus-pane", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as {
 		paneIndex: number;
@@ -128,10 +121,7 @@ app.get("/live/derived", async (c) => {
 	// at the tail are tool output rather than the footer. 1200 lines covers
 	// even very chatty sessions without being ridiculous.
 	const lastN = Number(c.req.query("lastN") ?? "1200");
-	const [tabsResp, sessions] = await Promise.all([
-		tabbyMcp.listTabs(),
-		tabbyMcp.getSessionList(),
-	]);
+	const [tabsResp, sessions] = await Promise.all([tabbyMcp.listTabs(), tabbyMcp.getSessionList()]);
 	const buffers = await Promise.allSettled(
 		sessions.map((s) =>
 			tabbyMcp.getTerminalBuffer({
@@ -143,11 +133,8 @@ app.get("/live/derived", async (c) => {
 	const rows = sessions.map((session, i) => {
 		const tab = tabsResp.tabs.find((t) => t.tabIndex === session.tabIndex);
 		const buf = buffers[i];
-		const bufferTail =
-			buf.status === "fulfilled" ? buf.value.content : undefined;
-		const derived: TabbyTabDerived = bufferTail
-			? deriveFromBuffer(bufferTail)
-			: {};
+		const bufferTail = buf.status === "fulfilled" ? buf.value.content : undefined;
+		const derived: TabbyTabDerived = bufferTail ? deriveFromBuffer(bufferTail) : {};
 		return { tab, session, derived, bufferTail };
 	});
 	return c.json({ rows, capturedAt: new Date().toISOString() });
@@ -194,9 +181,7 @@ app.post("/live/sessions/:sessionId/abort", async (c) =>
 	c.json(await tabbyMcp.abortCommand({ sessionId: c.req.param("sessionId") })),
 );
 app.get("/live/sessions/:sessionId/command-status", async (c) =>
-	c.json(
-		await tabbyMcp.getCommandStatus({ sessionId: c.req.param("sessionId") }),
-	),
+	c.json(await tabbyMcp.getCommandStatus({ sessionId: c.req.param("sessionId") })),
 );
 
 // ---- Profiles -------------------------------------------------------------
@@ -213,9 +198,7 @@ app.post("/live/profiles/quick-connect", async (c) => {
 	const body = (await c.req.json()) as { target: string };
 	return c.json(await tabbyMcp.quickConnect(body));
 });
-app.post("/live/profiles/selector", async (c) =>
-	c.json(await tabbyMcp.showProfileSelector()),
-);
+app.post("/live/profiles/selector", async (c) => c.json(await tabbyMcp.showProfileSelector()));
 
 // ---- SFTP (thin pass-throughs) --------------------------------------------
 
@@ -327,11 +310,7 @@ app.post("/sessions/:id/tabs", async (c) => {
 app.put("/sessions/:id/tabs/:tabId", async (c) => {
 	try {
 		const body = (await c.req.json()) as Partial<StoredTab>;
-		const session = await updateTab(
-			c.req.param("id"),
-			c.req.param("tabId"),
-			body,
-		);
+		const session = await updateTab(c.req.param("id"), c.req.param("tabId"), body);
 		return c.json(session);
 	} catch (err) {
 		return c.json({ error: (err as Error).message }, 404);
@@ -361,10 +340,7 @@ app.post("/snapshot", async (c) => {
 	const name = body.name ?? new Date().toISOString();
 	const bufferLines = body.bufferLines ?? 400;
 
-	const [tabsResp, sessions] = await Promise.all([
-		tabbyMcp.listTabs(),
-		tabbyMcp.getSessionList(),
-	]);
+	const [tabsResp, sessions] = await Promise.all([tabbyMcp.listTabs(), tabbyMcp.getSessionList()]);
 	const tabs = tabsResp.tabs;
 
 	const buffers = await Promise.allSettled(
@@ -379,15 +355,12 @@ app.post("/snapshot", async (c) => {
 	const storedTabs: StoredTab[] = sessions.map((s, i) => {
 		const listTabsEntry = tabs.find((t) => t.tabIndex === s.tabIndex);
 		const buf = buffers[i];
-		const bufferTail =
-			buf.status === "fulfilled" ? buf.value.content : undefined;
+		const bufferTail = buf.status === "fulfilled" ? buf.value.content : undefined;
 		const derived = bufferTail ? deriveFromBuffer(bufferTail) : undefined;
 		// Claude Code sessions get a sensible default restore command so the
 		// user doesn't have to type it for every tab. `ccr` is the user's
 		// alias for `claude --resume` (see ~/.bashrc / ~/.zshrc).
-		const autoCommand = derived?.claudeSessionId
-			? `ccr ${derived.claudeSessionId}`
-			: undefined;
+		const autoCommand = derived?.claudeSessionId ? `ccr ${derived.claudeSessionId}` : undefined;
 		return {
 			id: randomUUID(),
 			order: i,
@@ -439,9 +412,7 @@ async function openProfileAndAwaitSession(
 	while (Date.now() < deadline) {
 		await new Promise((r) => setTimeout(r, 150));
 		const sessions = await tabbyMcp.getSessionList();
-		const fresh = sessions.find(
-			(s) => s.profile.id === profileId && !before.has(s.sessionId),
-		);
+		const fresh = sessions.find((s) => s.profile.id === profileId && !before.has(s.sessionId));
 		if (fresh) return fresh.sessionId;
 	}
 	return null;
@@ -463,9 +434,7 @@ async function restoreOneTab(tab: StoredTab): Promise<{
 		// but we detected a Claude Code session at capture time.
 		const command =
 			tab.command ??
-			(tab.derived?.claudeSessionId
-				? `ccr ${tab.derived.claudeSessionId}`
-				: undefined);
+			(tab.derived?.claudeSessionId ? `ccr ${tab.derived.claudeSessionId}` : undefined);
 		const cwd = tab.cwd ?? tab.derived?.cwd;
 		const parts: string[] = [];
 		if (cwd) parts.push(`cd ${shellQuote(cwd)}`);

@@ -1,8 +1,7 @@
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { Injectable } from '@angular/core'
-
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
 
 export interface ClaudeCredentials {
     accessToken: string

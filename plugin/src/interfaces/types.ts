@@ -89,9 +89,9 @@ export interface ClaudeStatusDynamicConfig {
  */
 export interface ClaudeStatusAudioConfig {
     enabled: boolean
-    volume: number        // 0.0–1.0
-    rate: number          // 0.5–2.0
-    pitch: number         // 0.0–2.0
+    volume: number // 0.0–1.0
+    rate: number // 0.5–2.0
+    pitch: number // 0.0–2.0
     /**
      * Backend-independent default voice (used by Web Speech API and as a legacy value).
      * Per-backend selections live in `voicesByBackend` below.
@@ -194,18 +194,22 @@ export interface ClaudeStatusDisplayConfig {
 /**
  * Event→status mapping for v2 events from hook.js
  */
-export const HOOK_EVENT_STATUS_MAP: Record<string, ClaudeStatusName | ((meta: any) => ClaudeStatusName)> = {
-    'Stop': 'done',
-    'PermissionRequest': 'question',
-    'PostToolUseFailure': 'error',
-    'UserPromptSubmit': 'working',
-    'PreToolUse': 'working',
-    'PostToolUse': 'working',
-    'SessionStart': 'idle',
-    'SessionEnd': 'idle',
-    'Notification': (meta) =>
+export const HOOK_EVENT_STATUS_MAP: Record<
+    string,
+    ClaudeStatusName | ((meta: any) => ClaudeStatusName)
+> = {
+    Stop: 'done',
+    PermissionRequest: 'question',
+    PostToolUseFailure: 'error',
+    UserPromptSubmit: 'working',
+    PreToolUse: 'working',
+    PostToolUse: 'working',
+    SessionStart: 'idle',
+    SessionEnd: 'idle',
+    Notification: (meta) =>
         ['permission_prompt', 'ask_user', 'confirmation', 'idle_prompt'].includes(meta?.type)
-            ? 'question' : 'working',
+            ? 'question'
+            : 'working',
 }
 
 /**
@@ -252,7 +256,7 @@ export const DEFAULT_AUDIO_CONFIG: ClaudeStatusAudioConfig = {
                 transcriptOnly: false,
                 promptTemplate:
                     'Claude just finished a task. Tool last used: {lastToolName}. ' +
-                    "Last assistant message: \"{lastAssistant}\". " +
+                    'Last assistant message: "{lastAssistant}". ' +
                     'Write one short, casual announcement (≤7 words, no punctuation, no quotes) ' +
                     'that captures what was completed. Examples: "tests passing", "deploy finished", ' +
                     '"refactor done", "report ready". Output the phrase only.',
@@ -448,10 +452,10 @@ export interface ParseResult {
 export const DEFAULT_CONFIG: ClaudeStatusConfig = {
     enabled: true,
     colors: {
-        working: '#f59e0b',  // Amber
+        working: '#f59e0b', // Amber
         question: '#3b82f6', // Blue
-        done: '#22c55e',     // Green
-        error: '#ef4444',    // Red
+        done: '#22c55e', // Green
+        error: '#ef4444', // Red
     },
     clearOnFocus: true,
     doneAutoResetMs: 0,

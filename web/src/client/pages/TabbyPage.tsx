@@ -71,11 +71,7 @@ interface ProfilesResponse {
 }
 
 type LiveSortKey = "tabIndex" | "title" | "profile" | "branch";
-type StoredSortKey =
-	| "updatedAt-desc"
-	| "createdAt-desc"
-	| "name-asc"
-	| "tabCount-desc";
+type StoredSortKey = "updatedAt-desc" | "createdAt-desc" | "name-asc" | "tabCount-desc";
 
 interface DisplayOptions {
 	profileIcon: boolean;
@@ -155,8 +151,9 @@ const DISPLAY_GROUPS: DisplayGroup[] = [
 	},
 ];
 
-const DISPLAY_FIELDS: Array<[keyof DisplayOptions, string]> =
-	DISPLAY_GROUPS.flatMap((g) => g.fields);
+const DISPLAY_FIELDS: Array<[keyof DisplayOptions, string]> = DISPLAY_GROUPS.flatMap(
+	(g) => g.fields,
+);
 
 const DEFAULT_DISPLAY: DisplayOptions = {
 	profileIcon: true,
@@ -246,11 +243,9 @@ async function jfetch<T>(
 
 export function TabbyPage() {
 	const invalidate = useStore((s) => s.invalidate);
-	const stored = useCachedEndpoint<StoredSession[]>(
-		"tabby-sessions",
-		"/api/tabby/sessions",
-		{ staleAfter: 30_000 },
-	);
+	const stored = useCachedEndpoint<StoredSession[]>("tabby-sessions", "/api/tabby/sessions", {
+		staleAfter: 30_000,
+	});
 	const live = useCachedEndpoint<LiveDerivedResponse>(
 		"tabby-live-derived",
 		"/api/tabby/live/derived",
@@ -280,9 +275,7 @@ export function TabbyPage() {
 	const [liveSort, setLiveSort] = useState<LiveSortKey>("tabIndex");
 	const [storedSort, setStoredSort] = useState<StoredSortKey>("updatedAt-desc");
 	const [view, setView] = useState<"live" | "stored" | "profiles">("live");
-	const [display, setDisplayState] = useState<DisplayOptions>(() =>
-		loadDisplayOptions(),
-	);
+	const [display, setDisplayState] = useState<DisplayOptions>(() => loadDisplayOptions());
 	const setDisplay = useCallback((next: DisplayOptions) => {
 		setDisplayState(next);
 		try {
@@ -307,8 +300,7 @@ export function TabbyPage() {
 	const usedProfileIds = useMemo(() => {
 		const set = new Set<string>();
 		for (const r of live.data?.rows ?? []) set.add(r.session.profile.id);
-		for (const s of stored.data ?? [])
-			for (const t of s.tabs) set.add(t.profileId);
+		for (const s of stored.data ?? []) for (const t of s.tabs) set.add(t.profileId);
 		return set;
 	}, [live.data, stored.data]);
 	const usedTags = useMemo(() => {
@@ -319,8 +311,7 @@ export function TabbyPage() {
 
 	const filteredLive = useMemo(() => {
 		const rows = (live.data?.rows ?? []).filter((r) => {
-			if (profileFilter.size && !profileFilter.has(r.session.profile.id))
-				return false;
+			if (profileFilter.size && !profileFilter.has(r.session.profile.id)) return false;
 			return matchQuery(query, [
 				r.tab?.title,
 				r.session.profile.name,
@@ -337,11 +328,7 @@ export function TabbyPage() {
 	const filteredStored = useMemo(() => {
 		const sessions = (stored.data ?? []).filter((s) => {
 			if (tagFilter.size && !s.tags.some((t) => tagFilter.has(t))) return false;
-			if (
-				profileFilter.size &&
-				!s.tabs.some((t) => profileFilter.has(t.profileId))
-			)
-				return false;
+			if (profileFilter.size && !s.tabs.some((t) => profileFilter.has(t.profileId))) return false;
 			if (!query) return true;
 			if (
 				matchQuery(query, [s.name, s.comment, ...s.tags]) ||
@@ -392,13 +379,7 @@ export function TabbyPage() {
 					<h1 className="text-2xl font-bold">Tabby</h1>
 					<p className="text-sm text-[var(--muted)]">
 						Live + stored Tabby sessions ·{" "}
-						<span
-							className={
-								health.data?.ok
-									? "text-[var(--success)]"
-									: "text-[var(--danger)]"
-							}
-						>
+						<span className={health.data?.ok ? "text-[var(--success)]" : "text-[var(--danger)]"}>
 							{health.data?.ok ? "MCP connected" : "MCP offline"}
 						</span>
 						{health.data ? ` (${health.data.endpoint})` : ""}
@@ -463,17 +444,12 @@ export function TabbyPage() {
 						// so the Stored tab shows it instantly instead of waiting for
 						// the /sessions refetch to complete.
 						const state = useStore.getState();
-						const current =
-							(state.cache["tabby-sessions"]?.data as StoredSession[] | null) ??
-							[];
+						const current = (state.cache["tabby-sessions"]?.data as StoredSession[] | null) ?? [];
 						useStore.setState({
 							cache: {
 								...state.cache,
 								"tabby-sessions": {
-									data: [
-										newSession,
-										...current.filter((s) => s.id !== newSession.id),
-									],
+									data: [newSession, ...current.filter((s) => s.id !== newSession.id)],
 									fetchedAt: Date.now(),
 									loading: false,
 								},
@@ -503,9 +479,7 @@ export function TabbyPage() {
 					onChange={refreshAll}
 				/>
 			)}
-			{view === "profiles" && (
-				<ProfilesPanel profileMap={profileMap} query={query} />
-			)}
+			{view === "profiles" && <ProfilesPanel profileMap={profileMap} query={query} />}
 
 			{selection.size > 0 && (
 				<BulkBar
@@ -523,10 +497,7 @@ export function TabbyPage() {
 // Filter helpers
 // ---------------------------------------------------------------------------
 
-function matchQuery(
-	q: string,
-	fields: Array<string | undefined | null>,
-): boolean {
+function matchQuery(q: string, fields: Array<string | undefined | null>): boolean {
 	const needle = q.trim().toLowerCase();
 	if (!needle) return true;
 	for (const f of fields) {
@@ -552,10 +523,7 @@ function sortLive(rows: LiveDerivedRow[], key: LiveSortKey): LiveDerivedRow[] {
 	return out;
 }
 
-function sortStored(
-	sessions: StoredSession[],
-	key: StoredSortKey,
-): StoredSession[] {
+function sortStored(sessions: StoredSession[], key: StoredSortKey): StoredSession[] {
 	const out = [...sessions];
 	out.sort((a, b) => {
 		switch (key) {
@@ -597,11 +565,7 @@ function ViewTabs({
 		}`;
 	return (
 		<div className="flex items-center gap-1 border-b border-[var(--border)]">
-			<button
-				type="button"
-				onClick={() => setView("live")}
-				className={tabClass(view === "live")}
-			>
+			<button type="button" onClick={() => setView("live")} className={tabClass(view === "live")}>
 				Live <span className="text-xs opacity-70">({liveCount})</span>
 			</button>
 			<button
@@ -656,14 +620,9 @@ function Toolbar({
 	clearFilters: () => void;
 }) {
 	const profileChips = [...usedProfileIds]
-		.map(
-			(id) =>
-				profileMap.get(id) ??
-				({ profileId: id, name: id, type: "" } as Profile),
-		)
+		.map((id) => profileMap.get(id) ?? ({ profileId: id, name: id, type: "" } as Profile))
 		.sort((a, b) => a.name.localeCompare(b.name));
-	const hasAnyFilter =
-		query !== "" || profileFilter.size > 0 || tagFilter.size > 0;
+	const hasAnyFilter = query !== "" || profileFilter.size > 0 || tagFilter.size > 0;
 
 	return (
 		<div className="border border-[var(--border)] rounded-lg p-3 bg-[var(--card)] flex flex-col gap-2">
@@ -756,9 +715,7 @@ function DisplayMenu({
 		<details className="relative">
 			<summary className="list-none cursor-pointer px-2 py-1 rounded text-xs border border-[var(--border)] hover:bg-[var(--border)] flex items-center gap-1.5">
 				<span>Display</span>
-				{hiddenCount > 0 && (
-					<span className="text-[10px] opacity-70">({hiddenCount} hidden)</span>
-				)}
+				{hiddenCount > 0 && <span className="text-[10px] opacity-70">({hiddenCount} hidden)</span>}
 				<span className="opacity-60">▾</span>
 			</summary>
 			<div className="absolute right-0 mt-1 z-10 min-w-[240px] border border-[var(--border)] rounded bg-[var(--card)] shadow-lg p-2 flex flex-col gap-1.5">
@@ -839,12 +796,7 @@ function DisplayGroupToggles({
 	return (
 		<div className="flex flex-col gap-0.5">
 			<label className="flex items-center gap-2 px-1.5 py-0.5 rounded hover:bg-[var(--border)] cursor-pointer">
-				<input
-					ref={masterRef}
-					type="checkbox"
-					checked={allOn}
-					onChange={toggleAll}
-				/>
+				<input ref={masterRef} type="checkbox" checked={allOn} onChange={toggleAll} />
 				<span className="text-[10px] font-bold uppercase tracking-wider text-[var(--muted)]">
 					{group.name}
 				</span>
@@ -858,9 +810,7 @@ function DisplayGroupToggles({
 						<input
 							type="checkbox"
 							checked={display[key]}
-							onChange={(e) =>
-								setDisplay({ ...display, [key]: e.target.checked })
-							}
+							onChange={(e) => setDisplay({ ...display, [key]: e.target.checked })}
 						/>
 						<span>{label}</span>
 					</label>
@@ -874,13 +824,7 @@ function DisplayGroupToggles({
 // Profile icon
 // ---------------------------------------------------------------------------
 
-function ProfileIcon({
-	profile,
-	size = 16,
-}: {
-	profile?: Profile;
-	size?: number;
-}) {
+function ProfileIcon({ profile, size = 16 }: { profile?: Profile; size?: number }) {
 	if (!profile?.icon) {
 		return (
 			<span
@@ -941,9 +885,7 @@ function LivePanel({
 	setSortKey: (k: LiveSortKey) => void;
 	onSnapshot: (session: StoredSession) => void;
 }) {
-	const [name, setName] = useState(() =>
-		new Date().toISOString().slice(0, 16).replace("T", " "),
-	);
+	const [name, setName] = useState(() => new Date().toISOString().slice(0, 16).replace("T", " "));
 	const [comment, setComment] = useState("");
 	const [tags, setTags] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -1043,9 +985,7 @@ function LivePanel({
 				<div className="text-sm text-[var(--muted)]">Loading…</div>
 			) : rows.length === 0 ? (
 				<div className="text-sm text-[var(--muted)]">
-					{totalRows === 0
-						? "No live tabs."
-						: "No tabs match the current filters."}
+					{totalRows === 0 ? "No live tabs." : "No tabs match the current filters."}
 				</div>
 			) : (
 				<div className="flex flex-col gap-2">
@@ -1078,9 +1018,7 @@ function LiveRow({
 	return (
 		<div className="border border-[var(--border)] rounded bg-[var(--bg)] p-2 flex flex-col gap-1">
 			<div className="flex items-start gap-2">
-				<span className="text-xs text-[var(--muted)] w-5 shrink-0 mt-0.5">
-					{session.tabIndex}
-				</span>
+				<span className="text-xs text-[var(--muted)] w-5 shrink-0 mt-0.5">{session.tabIndex}</span>
 				<div className="flex-1 min-w-0">
 					<div className="flex items-center gap-2 flex-wrap">
 						{display.profileIcon && <ProfileIcon profile={profile} size={16} />}
@@ -1090,18 +1028,12 @@ function LiveRow({
 								style={{ background: tab.color }}
 							/>
 						)}
-						<span className="font-medium text-sm truncate">
-							{tab?.title ?? session.title}
-						</span>
+						<span className="font-medium text-sm truncate">{tab?.title ?? session.title}</span>
 						{tab?.isActive && (
-							<span className="text-[10px] px-1 rounded bg-[var(--accent)] text-white">
-								active
-							</span>
+							<span className="text-[10px] px-1 rounded bg-[var(--accent)] text-white">active</span>
 						)}
 						{display.profileName && (
-							<span className="text-xs text-[var(--muted)]">
-								{session.profile.name}
-							</span>
+							<span className="text-xs text-[var(--muted)]">{session.profile.name}</span>
 						)}
 						{session.isSplit && session.totalPanes > 1 && (
 							<span className="text-[10px] px-1 rounded border border-[var(--border)] text-[var(--muted)]">
@@ -1121,9 +1053,7 @@ function LiveRow({
 					</button>
 				)}
 			</div>
-			{showBuffer && row.bufferTail && (
-				<BufferPre text={stripAnsi(row.bufferTail)} />
-			)}
+			{showBuffer && row.bufferTail && <BufferPre text={stripAnsi(row.bufferTail)} />}
 		</div>
 	);
 }
@@ -1144,17 +1074,13 @@ function DerivedFields({
 	const showModelMode = display.modelMode && (derived.model || derived.mode);
 	const showCtx = display.contextUsage && derived.contextUsage;
 	const showAge = display.sessionAge && derived.sessionAge;
-	const showPct =
-		display.usagePct && derived.usagePct && derived.usagePct.length > 0;
-	const showSkills =
-		display.skills && derived.skills && derived.skills.length > 0;
+	const showPct = display.usagePct && derived.usagePct && derived.usagePct.length > 0;
+	const showSkills = display.skills && derived.skills && derived.skills.length > 0;
 	const showRecap = display.recap && derived.recap;
 	const showUser = display.userTurn && derived.recentUserTurn;
 	const showAssistant = display.assistantTurn && derived.recentAssistantTurn;
-	const showPrs =
-		display.prs && derived.prNumbers && derived.prNumbers.length > 0;
-	const showShas =
-		display.shas && derived.commitShas && derived.commitShas.length > 0;
+	const showPrs = display.prs && derived.prNumbers && derived.prNumbers.length > 0;
+	const showShas = display.shas && derived.commitShas && derived.commitShas.length > 0;
 	if (
 		!showCwdBranch &&
 		!showSid &&
@@ -1193,9 +1119,7 @@ function DerivedFields({
 							className="opacity-70 hover:opacity-100 cursor-pointer bg-transparent border-0 p-0 font-mono"
 							title="Click to copy"
 							onClick={() => {
-								navigator.clipboard
-									?.writeText(derived.claudeSessionId ?? "")
-									.catch(() => {});
+								navigator.clipboard?.writeText(derived.claudeSessionId ?? "").catch(() => {});
 							}}
 						>
 							session: {derived.claudeSessionId}
@@ -1208,22 +1132,12 @@ function DerivedFields({
 					{showModelMode && (
 						<span>
 							{derived.model}
-							{derived.mode && (
-								<span className="opacity-70"> · {derived.mode}</span>
-							)}
+							{derived.mode && <span className="opacity-70"> · {derived.mode}</span>}
 						</span>
 					)}
-					{showCtx && (
-						<span className="opacity-70">ctx {derived.contextUsage}</span>
-					)}
-					{showAge && (
-						<span className="opacity-70">age {derived.sessionAge}</span>
-					)}
-					{showPct && (
-						<span className="opacity-70">
-							usage {derived.usagePct?.join(" / ")}
-						</span>
-					)}
+					{showCtx && <span className="opacity-70">ctx {derived.contextUsage}</span>}
+					{showAge && <span className="opacity-70">age {derived.sessionAge}</span>}
+					{showPct && <span className="opacity-70">usage {derived.usagePct?.join(" / ")}</span>}
 				</div>
 			)}
 			{showSkills && (
@@ -1245,20 +1159,12 @@ function DerivedFields({
 				</div>
 			)}
 			{showUser && (
-				<div className="text-[var(--muted)] italic truncate">
-					❯ {derived.recentUserTurn}
-				</div>
+				<div className="text-[var(--muted)] italic truncate">❯ {derived.recentUserTurn}</div>
 			)}
 			{showAssistant && (
-				<div className="text-[var(--muted)] truncate">
-					● {derived.recentAssistantTurn}
-				</div>
+				<div className="text-[var(--muted)] truncate">● {derived.recentAssistantTurn}</div>
 			)}
-			{showPrs && (
-				<div className="text-[var(--muted)]">
-					PRs: {derived.prNumbers?.join(" ")}
-				</div>
-			)}
+			{showPrs && <div className="text-[var(--muted)]">PRs: {derived.prNumbers?.join(" ")}</div>}
 			{showShas && (
 				<div className="text-[var(--muted)] font-mono">
 					SHAs: {derived.commitShas?.slice(0, 8).join(" ")}
@@ -1282,13 +1188,7 @@ interface ProfileSettingsFile {
 	profiles: Record<string, ProfileSetting>;
 }
 
-function ProfilesPanel({
-	profileMap,
-	query,
-}: {
-	profileMap: Map<string, Profile>;
-	query: string;
-}) {
+function ProfilesPanel({ profileMap, query }: { profileMap: Map<string, Profile>; query: string }) {
 	const settings = useCachedEndpoint<ProfileSettingsFile>(
 		"tabby-profile-settings",
 		"/api/tabby/profile-settings",
@@ -1307,10 +1207,9 @@ function ProfilesPanel({
 				<div>
 					<h2 className="font-semibold">Profile settings</h2>
 					<p className="text-xs text-[var(--muted)] mt-0.5 max-w-2xl">
-						<strong>Open delay</strong> is how long to wait after a profile's
-						tab opens before running the stored <code>cd</code> + command. WSL
-						cold boot + oh-my-zsh can need 1–2s before the shell accepts input.
-						Leave blank to use the default ({defaultDelay} ms).
+						<strong>Open delay</strong> is how long to wait after a profile's tab opens before
+						running the stored <code>cd</code> + command. WSL cold boot + oh-my-zsh can need 1–2s
+						before the shell accepts input. Leave blank to use the default ({defaultDelay} ms).
 					</p>
 				</div>
 				<button
@@ -1402,9 +1301,7 @@ function ProfileSettingRow({
 			<div className="flex-1 min-w-0">
 				<div className="flex items-center gap-2">
 					<span className="font-medium text-sm truncate">{profile.name}</span>
-					<span className="text-xs text-[var(--muted)] truncate">
-						{profile.type}
-					</span>
+					<span className="text-xs text-[var(--muted)] truncate">{profile.type}</span>
 				</div>
 				<div className="text-[11px] font-mono text-[var(--muted)] truncate">
 					{profile.profileId}
@@ -1493,13 +1390,10 @@ function StoredPanel({
 				<div className="text-sm text-[var(--muted)]">Loading…</div>
 			) : totalSessions === 0 ? (
 				<div className="text-sm text-[var(--muted)]">
-					No sessions yet — use "Snapshot now" above to save your current Tabby
-					layout.
+					No sessions yet — use "Snapshot now" above to save your current Tabby layout.
 				</div>
 			) : filteredCount === 0 ? (
-				<div className="text-sm text-[var(--muted)]">
-					No sessions match the current filters.
-				</div>
+				<div className="text-sm text-[var(--muted)]">No sessions match the current filters.</div>
 			) : (
 				<div className="flex flex-col gap-4">
 					{groups.map(([tag, list]) => (
@@ -1606,8 +1500,7 @@ function SessionCard({
 
 	const tabKey = (tabId: string) => `${session.id}::${tabId}`;
 	const allSelected =
-		session.tabs.length > 0 &&
-		session.tabs.every((t) => selection.has(tabKey(t.id)));
+		session.tabs.length > 0 && session.tabs.every((t) => selection.has(tabKey(t.id)));
 	function toggleAll() {
 		const next = new Set(selection);
 		if (allSelected) {
@@ -1683,9 +1576,7 @@ function SessionCard({
 								</span>
 							</div>
 							{session.comment && (
-								<div className="text-xs text-[var(--muted)] truncate">
-									{session.comment}
-								</div>
+								<div className="text-xs text-[var(--muted)] truncate">{session.comment}</div>
 							)}
 						</button>
 					)}
@@ -1745,11 +1636,7 @@ function SessionCard({
 				</div>
 			</div>
 
-			{lastResult && (
-				<div className="px-3 pb-2 text-xs text-[var(--muted)]">
-					{lastResult}
-				</div>
-			)}
+			{lastResult && <div className="px-3 pb-2 text-xs text-[var(--muted)]">{lastResult}</div>}
 
 			{expanded && (
 				<div className="border-t border-[var(--border)] p-3 flex flex-col gap-2">
@@ -1801,17 +1688,14 @@ function TabRow({
 
 	async function save() {
 		setBusy("save");
-		const res = await jfetch(
-			`/api/tabby/sessions/${sessionId}/tabs/${tab.id}`,
-			{
-				method: "PUT",
-				body: JSON.stringify({
-					cwd: cwd || undefined,
-					command: command || undefined,
-					comment: comment || undefined,
-				}),
-			},
-		);
+		const res = await jfetch(`/api/tabby/sessions/${sessionId}/tabs/${tab.id}`, {
+			method: "PUT",
+			body: JSON.stringify({
+				cwd: cwd || undefined,
+				command: command || undefined,
+				comment: comment || undefined,
+			}),
+		});
 		setBusy(null);
 		if (res.ok) {
 			setEditing(false);
@@ -1824,10 +1708,9 @@ function TabRow({
 	async function restore() {
 		setBusy("restore");
 		setMsg(null);
-		const res = await jfetch(
-			`/api/tabby/sessions/${sessionId}/tabs/${tab.id}/restore`,
-			{ method: "POST" },
-		);
+		const res = await jfetch(`/api/tabby/sessions/${sessionId}/tabs/${tab.id}/restore`, {
+			method: "POST",
+		});
 		setBusy(null);
 		setMsg(res.ok ? "Opened" : `Restore failed: ${res.error}`);
 	}
@@ -1835,10 +1718,9 @@ function TabRow({
 	async function remove() {
 		if (!confirm(`Delete tab "${tab.title}"?`)) return;
 		setBusy("delete");
-		const res = await jfetch(
-			`/api/tabby/sessions/${sessionId}/tabs/${tab.id}`,
-			{ method: "DELETE" },
-		);
+		const res = await jfetch(`/api/tabby/sessions/${sessionId}/tabs/${tab.id}`, {
+			method: "DELETE",
+		});
 		setBusy(null);
 		if (res.ok) onChange();
 		else setMsg(`Delete failed: ${res.error}`);
@@ -1847,12 +1729,7 @@ function TabRow({
 	return (
 		<div className="border border-[var(--border)] rounded bg-[var(--card)] p-2 flex flex-col gap-1.5">
 			<div className="flex items-start gap-2">
-				<input
-					type="checkbox"
-					checked={selected}
-					onChange={onToggle}
-					className="mt-1"
-				/>
+				<input type="checkbox" checked={selected} onChange={onToggle} className="mt-1" />
 				<div className="flex-1 min-w-0">
 					<div className="flex items-center gap-2">
 						{display.profileIcon && (
@@ -1866,9 +1743,7 @@ function TabRow({
 						)}
 						<span className="font-medium text-sm truncate">{tab.title}</span>
 						{display.profileName && (
-							<span className="text-xs text-[var(--muted)]">
-								{tab.profileName}
-							</span>
+							<span className="text-xs text-[var(--muted)]">{tab.profileName}</span>
 						)}
 						{tab.isSplit && tab.totalPanes && tab.totalPanes > 1 && (
 							<span className="text-[10px] px-1 rounded border border-[var(--border)] text-[var(--muted)]">
@@ -1877,9 +1752,7 @@ function TabRow({
 						)}
 					</div>
 					{tab.comment && !editing && (
-						<div className="text-xs text-[var(--muted)] mt-0.5">
-							{tab.comment}
-						</div>
+						<div className="text-xs text-[var(--muted)] mt-0.5">{tab.comment}</div>
 					)}
 				</div>
 				<div className="flex items-center gap-1 shrink-0">
@@ -1951,17 +1824,14 @@ function TabRow({
 				</div>
 			) : (
 				<div className="pl-6 flex flex-col gap-1">
-					{((display.manualCwd && tab.cwd) ||
-						(display.manualCommand && tab.command)) && (
+					{((display.manualCwd && tab.cwd) || (display.manualCommand && tab.command)) && (
 						<div className="text-xs font-mono text-[var(--text)]">
 							{display.manualCwd && tab.cwd && (
 								<div>
 									<span className="text-[var(--muted)]">cwd:</span> {tab.cwd}
 								</div>
 							)}
-							{display.manualCommand && tab.command && (
-								<div>$ {tab.command}</div>
-							)}
+							{display.manualCommand && tab.command && <div>$ {tab.command}</div>}
 						</div>
 					)}
 					<DerivedFields derived={tab.derived} display={display} />
@@ -1978,9 +1848,7 @@ function TabRow({
 						{showBuffer ? "Hide" : "Show"} captured buffer (
 						{new Date(tab.raw.capturedAt).toISOString().slice(0, 19)})
 					</button>
-					{showBuffer && (
-						<BufferPre text={stripAnsi(tab.raw.bufferTail)} className="mt-1" />
-					)}
+					{showBuffer && <BufferPre text={stripAnsi(tab.raw.bufferTail)} className="mt-1" />}
 				</div>
 			)}
 
@@ -1994,13 +1862,7 @@ function stripAnsi(s: string): string {
 	return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 }
 
-function BufferPre({
-	text,
-	className = "",
-}: {
-	text: string;
-	className?: string;
-}) {
+function BufferPre({ text, className = "" }: { text: string; className?: string }) {
 	const ref = useRef<HTMLPreElement>(null);
 	useEffect(() => {
 		// Scroll to the bottom when the buffer first mounts — the most recent
@@ -2046,10 +1908,7 @@ function BulkBar({
 	}, [selection]);
 
 	const unknownMissing = items.some(
-		(item) =>
-			!sessions
-				.find((s) => s.id === item.sessionId)
-				?.tabs.some((t) => t.id === item.tabId),
+		(item) => !sessions.find((s) => s.id === item.sessionId)?.tabs.some((t) => t.id === item.tabId),
 	);
 
 	async function restore() {
@@ -2082,9 +1941,7 @@ function BulkBar({
 			<span className="text-sm font-medium">
 				{selection.size} tab{selection.size === 1 ? "" : "s"} selected
 			</span>
-			{unknownMissing && (
-				<span className="text-xs text-[var(--danger)]">stale selection</span>
-			)}
+			{unknownMissing && <span className="text-xs text-[var(--danger)]">stale selection</span>}
 			<button
 				type="button"
 				onClick={restore}

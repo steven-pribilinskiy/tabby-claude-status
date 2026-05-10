@@ -397,9 +397,7 @@ export function TabbyMcpPage() {
 									<div className="font-mono text-xs">{t.name}</div>
 									<div
 										className={`text-[11px] truncate ${
-											t.name === selected
-												? "text-white/80"
-												: "text-[var(--muted)]"
+											t.name === selected ? "text-white/80" : "text-[var(--muted)]"
 										}`}
 									>
 										{t.summary}
@@ -414,12 +412,8 @@ export function TabbyMcpPage() {
 					<div className="border border-[var(--border)] rounded-lg p-4 bg-[var(--card)]">
 						<div className="flex items-center justify-between gap-2 mb-3">
 							<div>
-								<div className="font-mono text-sm font-semibold">
-									{tool.name}
-								</div>
-								<div className="text-xs text-[var(--muted)]">
-									{tool.summary}
-								</div>
+								<div className="font-mono text-sm font-semibold">{tool.name}</div>
+								<div className="text-xs text-[var(--muted)]">{tool.summary}</div>
 							</div>
 							<div className="flex items-center gap-1.5">
 								<button
@@ -448,21 +442,14 @@ export function TabbyMcpPage() {
 									const inputId = `${tool.name}-${p.name}`;
 									return (
 										<div key={p.name} className="flex flex-col gap-1 text-xs">
-											<label
-												htmlFor={inputId}
-												className="font-mono text-[var(--muted)]"
-											>
+											<label htmlFor={inputId} className="font-mono text-[var(--muted)]">
 												{p.name}
 												{p.optional ? (
 													<span className="text-[10px] ml-1 opacity-60">?</span>
 												) : (
-													<span className="text-[10px] ml-1 text-[var(--danger)]">
-														*
-													</span>
+													<span className="text-[10px] ml-1 text-[var(--danger)]">*</span>
 												)}
-												<span className="text-[10px] ml-1 opacity-60">
-													({p.kind})
-												</span>
+												<span className="text-[10px] ml-1 opacity-60">({p.kind})</span>
 											</label>
 											{p.kind === "boolean" ? (
 												<select

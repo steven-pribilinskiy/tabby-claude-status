@@ -1,0 +1,86 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.4/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"includes": [
+			"plugin/src/**/*.{ts,tsx,js,mjs,cjs}",
+			"plugin/hook.js",
+			"plugin/scripts/**/*.js",
+			"plugin/rspack.config.js",
+			"web/src/**/*.{ts,tsx,js,mjs,cjs}",
+			"web/vite.config.ts",
+			"!**/node_modules",
+			"!**/dist",
+			"!**/public",
+			"!**/data"
+		]
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"style": {
+				"useImportType": "warn"
+			},
+			"suspicious": {
+				"noExplicitAny": "off"
+			}
+		}
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"lineWidth": 100
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"semicolons": "always",
+			"trailingCommas": "all",
+			"arrowParentheses": "always"
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["plugin/**"],
+			"formatter": {
+				"indentStyle": "space",
+				"indentWidth": 4
+			},
+			"javascript": {
+				"formatter": {
+					"quoteStyle": "single",
+					"semicolons": "asNeeded"
+				},
+				"parser": {
+					"unsafeParameterDecoratorsEnabled": true
+				}
+			},
+			"linter": {
+				"rules": {
+					"style": {
+						"noNonNullAssertion": "off"
+					},
+					"correctness": {
+						"noUnusedPrivateClassMembers": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["plugin/src/services/statusParserService.ts"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noControlCharactersInRegex": "off",
+						"noAssignInExpressions": "off"
+					}
+				}
+			}
+		}
+	]
+}

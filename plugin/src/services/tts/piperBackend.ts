@@ -1,8 +1,8 @@
-import { spawn } from 'child_process'
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
-import { TtsBackend, TtsSpeakParams, TtsVoice } from './tts.interface'
+import { spawn } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import type { TtsBackend, TtsSpeakParams, TtsVoice } from './tts.interface'
 
 /**
  * Piper TTS — local ONNX neural voices. Originally https://github.com/rhasspy/piper
@@ -83,7 +83,7 @@ export class PiperBackend implements TtsBackend {
     }
 
     async speak(params: TtsSpeakParams): Promise<void> {
-        if (!await this.isAvailable()) {
+        if (!(await this.isAvailable())) {
             throw new Error('Piper backend not configured — set piperExePath and piperModelPath')
         }
 
@@ -96,14 +96,16 @@ export class PiperBackend implements TtsBackend {
             windowsHide: true,
         })
 
-        proc.stdin.write(params.text + '\n')
+        proc.stdin.write(`${params.text}\n`)
         proc.stdin.end()
 
         await new Promise<void>((resolve, reject) => {
             let stderr = ''
-            proc.stderr.on('data', d => { stderr += d.toString() })
+            proc.stderr.on('data', (d) => {
+                stderr += d.toString()
+            })
             proc.on('error', reject)
-            proc.on('close', code => {
+            proc.on('close', (code) => {
                 if (code === 0) resolve()
                 else reject(new Error(`piper exited ${code}: ${stderr.trim() || '(no stderr)'}`))
             })
@@ -113,7 +115,9 @@ export class PiperBackend implements TtsBackend {
         try {
             wav = await fs.promises.readFile(tmpWav)
         } finally {
-            fs.promises.unlink(tmpWav).catch(() => { /* best-effort cleanup */ })
+            fs.promises.unlink(tmpWav).catch(() => {
+                /* best-effort cleanup */
+            })
         }
         if (wav.length < 44) {
             throw new Error(`piper produced an empty/too-small WAV (${wav.length} bytes)`)

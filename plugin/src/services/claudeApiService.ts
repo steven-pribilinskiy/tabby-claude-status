@@ -1,8 +1,8 @@
 import { Injectable } from '@angular/core'
 import Anthropic from '@anthropic-ai/sdk'
-import { ClaudeStatusDynamicConfig, ClaudeStatusName } from '../interfaces/types'
-import { TranscriptTail } from './transcriptReaderService'
-import { ClaudeCredentialsService } from './claudeCredentialsService'
+import type { ClaudeStatusDynamicConfig, ClaudeStatusName } from '../interfaces/types'
+import type { ClaudeCredentialsService } from './claudeCredentialsService'
+import type { TranscriptTail } from './transcriptReaderService'
 
 export interface DynamicPhraseContext {
     /** Mapped status the plugin acted on. */
@@ -75,22 +75,28 @@ export class ClaudeApiService {
      * the settings UI can show "Couldn't reach Anthropic API — showing a
      * curated list" instead of failing silently.
      */
-    async listModels(opts: { force?: boolean; cfg: ClaudeStatusDynamicConfig }):
-        Promise<{ models: ClaudeModelOption[]; error: string | null; fromCache: boolean }> {
+    async listModels(opts: {
+        force?: boolean
+        cfg: ClaudeStatusDynamicConfig
+    }): Promise<{ models: ClaudeModelOption[]; error: string | null; fromCache: boolean }> {
         if (!opts.force && this.modelsCache) {
             return { models: this.modelsCache, error: this.modelsCacheError, fromCache: true }
         }
         const auth = this.resolveAuth(opts.cfg)
         if (!auth) {
             this.modelsCache = ClaudeApiService.STATIC_FALLBACK_MODELS
-            this.modelsCacheError = 'Sign in to Claude Code or paste an API key to fetch the live list.'
+            this.modelsCacheError =
+                'Sign in to Claude Code or paste an API key to fetch the live list.'
             return { models: this.modelsCache, error: this.modelsCacheError, fromCache: false }
         }
         try {
             const clientOptions: any = {
                 dangerouslyAllowBrowser: true,
                 ...(auth.kind === 'oauth'
-                    ? { authToken: auth.token, defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' } }
+                    ? {
+                          authToken: auth.token,
+                          defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' },
+                      }
                     : { apiKey: auth.token }),
             }
             const client = new Anthropic(clientOptions)
@@ -100,7 +106,7 @@ export class ClaudeApiService {
             const page = await client.models.list({ limit: 100 })
             const data = (page as any).data as Array<{ id: string; display_name?: string }>
             const models = data
-                .map(m => ({ id: m.id, displayName: m.display_name || m.id }))
+                .map((m) => ({ id: m.id, displayName: m.display_name || m.id }))
                 .sort((a, b) => a.displayName.localeCompare(b.displayName))
             this.modelsCache = models
             this.modelsCacheError = null
@@ -147,7 +153,10 @@ export class ClaudeApiService {
             const clientOptions: any = {
                 dangerouslyAllowBrowser: true,
                 ...(auth.kind === 'oauth'
-                    ? { authToken: auth.token, defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' } }
+                    ? {
+                          authToken: auth.token,
+                          defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' },
+                      }
                     : { apiKey: auth.token }),
             }
             const client = new Anthropic(clientOptions)
@@ -164,7 +173,7 @@ export class ClaudeApiService {
 
             const text = response.content
                 .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-                .map(b => b.text)
+                .map((b) => b.text)
                 .join(' ')
                 .trim()
 
@@ -186,10 +195,9 @@ export class ClaudeApiService {
         }
     }
 
-    private resolveAuth(cfg: ClaudeStatusDynamicConfig):
-        | { kind: 'oauth'; token: string }
-        | { kind: 'api-key'; token: string }
-        | null {
+    private resolveAuth(
+        cfg: ClaudeStatusDynamicConfig,
+    ): { kind: 'oauth'; token: string } | { kind: 'api-key'; token: string } | null {
         const status = this.credentials.getStatus()
         if (status.state === 'ok' && status.creds) {
             return { kind: 'oauth', token: status.creds.accessToken }

@@ -1,10 +1,10 @@
+import { execFile } from 'node:child_process'
+import { readdir, stat } from 'node:fs/promises'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { promisify } from 'node:util'
 import { Injectable } from '@angular/core'
-import { execFile } from 'child_process'
-import { readdir, stat } from 'fs/promises'
-import * as os from 'os'
-import * as path from 'path'
-import { promisify } from 'util'
-import { ClaudeStatusAudioConfig } from '../interfaces/types'
+import type { ClaudeStatusAudioConfig } from '../interfaces/types'
 
 const execFileAsync = promisify(execFile)
 
@@ -43,8 +43,8 @@ export class ZoomStateService {
         if (!IS_WIN32) return false
         if (!cfg.muteDuringZoomRecording && !cfg.muteDuringZoomMeeting) return false
 
-        if (cfg.muteDuringZoomRecording && await this.isRecording()) return true
-        if (cfg.muteDuringZoomMeeting && await this.isInMeeting()) return true
+        if (cfg.muteDuringZoomRecording && (await this.isRecording())) return true
+        if (cfg.muteDuringZoomMeeting && (await this.isInMeeting())) return true
         return false
     }
 
@@ -140,7 +140,7 @@ export class ZoomStateService {
         )
         for (const line of stdout.split(/\r?\n/)) {
             if (!line.startsWith('"Zoom.exe"')) continue
-            const cols = line.split('","').map(c => c.replace(/^"|"$/g, ''))
+            const cols = line.split('","').map((c) => c.replace(/^"|"$/g, ''))
             const title = cols[cols.length - 1]
             if (title && title !== 'N/A' && MEETING_TITLE_RE.test(title)) {
                 return true

@@ -1,4 +1,4 @@
-import { TtsBackend, TtsSpeakParams, TtsVoice } from './tts.interface'
+import type { TtsBackend, TtsSpeakParams, TtsVoice } from './tts.interface'
 
 /**
  * Uses the browser-provided Web Speech API. In Electron on Windows this
@@ -19,7 +19,7 @@ export class WebSpeechBackend implements TtsBackend {
         if (voices.length > 0) return this.dedupeOneCore(this.mapVoices(voices))
 
         // Voices sometimes load async; give the engine up to ~500ms to populate.
-        await new Promise<void>(resolve => {
+        await new Promise<void>((resolve) => {
             if (typeof window === 'undefined' || !window.speechSynthesis) {
                 resolve()
                 return
@@ -53,7 +53,7 @@ export class WebSpeechBackend implements TtsBackend {
      * those substrings keeps Web Speech as the SAPI-only fallback we want.
      */
     private dedupeOneCore(voices: TtsVoice[]): TtsVoice[] {
-        return voices.filter(v => {
+        return voices.filter((v) => {
             const name = v.id || v.label || ''
             if (/\(Natural\)/i.test(name)) return false
             if (/\bOnline\b/i.test(name)) return false
@@ -74,12 +74,15 @@ export class WebSpeechBackend implements TtsBackend {
         utterance.pitch = params.pitch
 
         if (params.voiceId) {
-            const voice = this.getNativeVoices().find(v => v.name === params.voiceId)
+            const voice = this.getNativeVoices().find((v) => v.name === params.voiceId)
             if (voice) utterance.voice = voice
         }
 
-        utterance.onerror = e => {
-            console.error('[claude-status] Web Speech TTS error:', (e as SpeechSynthesisErrorEvent).error)
+        utterance.onerror = (e) => {
+            console.error(
+                '[claude-status] Web Speech TTS error:',
+                (e as SpeechSynthesisErrorEvent).error,
+            )
         }
 
         window.speechSynthesis.speak(utterance)
@@ -97,7 +100,7 @@ export class WebSpeechBackend implements TtsBackend {
     }
 
     private mapVoices(voices: SpeechSynthesisVoice[]): TtsVoice[] {
-        return voices.map(v => ({
+        return voices.map((v) => ({
             id: v.name,
             label: `${v.name} (${v.lang})`,
             locale: v.lang,

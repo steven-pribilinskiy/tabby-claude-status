@@ -1,7 +1,7 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { Injectable } from '@angular/core'
-import { execFile } from 'child_process'
-import { promisify } from 'util'
-import { AudioMode, ClaudeStatusAudioConfig } from '../interfaces/types'
+import type { AudioMode, ClaudeStatusAudioConfig } from '../interfaces/types'
 
 const execFileAsync = promisify(execFile)
 

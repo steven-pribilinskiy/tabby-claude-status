@@ -1,5 +1,5 @@
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts'
-import { TtsBackend, TtsSpeakParams, TtsVoice } from './tts.interface'
+import type { TtsBackend, TtsSpeakParams, TtsVoice } from './tts.interface'
 
 /**
  * Microsoft Edge "Read Aloud" neural TTS via the free Azure endpoint used
@@ -32,7 +32,7 @@ export class EdgeTtsBackend implements TtsBackend {
         try {
             const raw = await tts.getVoices()
             this.voicesCache = raw
-                .map(v => ({
+                .map((v) => ({
                     id: v.ShortName,
                     label: `${v.FriendlyName || v.ShortName} — ${v.Locale} (${v.Gender})`,
                     locale: v.Locale,
@@ -88,10 +88,14 @@ export class EdgeTtsBackend implements TtsBackend {
         audio.volume = params.volume
         this.currentAudio = audio
         audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true })
-        audio.addEventListener('error', e => {
-            console.error('[claude-status] Edge TTS playback error:', e)
-            URL.revokeObjectURL(url)
-        }, { once: true })
+        audio.addEventListener(
+            'error',
+            (e) => {
+                console.error('[claude-status] Edge TTS playback error:', e)
+                URL.revokeObjectURL(url)
+            },
+            { once: true },
+        )
 
         await audio.play()
     }

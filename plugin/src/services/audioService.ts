@@ -1,17 +1,17 @@
 import { Injectable } from '@angular/core'
-import { ClaudeStatusConfigService } from './configService'
-import { ZoomStateService } from './zoomStateService'
-import { MicStateService } from './micStateService'
-import { SoundService } from './soundService'
-import { StatusActivityLogService } from './statusActivityLogService'
-import { ClaudeApiService, DynamicPhraseContext } from './claudeApiService'
-import { TranscriptReaderService, TranscriptTail } from './transcriptReaderService'
-import { ClaudeStatusAudioConfig, ClaudeStatusName, TtsBackendId } from '../interfaces/types'
-import { TtsBackend, TtsSpeakParams } from './tts/tts.interface'
-import { WebSpeechBackend } from './tts/webSpeechBackend'
+import type { ClaudeStatusAudioConfig, ClaudeStatusName, TtsBackendId } from '../interfaces/types'
+import type { ClaudeApiService, DynamicPhraseContext } from './claudeApiService'
+import type { ClaudeStatusConfigService } from './configService'
+import type { MicStateService } from './micStateService'
+import type { SoundService } from './soundService'
+import type { StatusActivityLogService } from './statusActivityLogService'
+import type { TranscriptReaderService, TranscriptTail } from './transcriptReaderService'
 import { EdgeTtsBackend } from './tts/edgeTtsBackend'
-import { WinRtBackend } from './tts/winRtBackend'
 import { PiperBackend } from './tts/piperBackend'
+import type { TtsBackend, TtsSpeakParams } from './tts/tts.interface'
+import { WebSpeechBackend } from './tts/webSpeechBackend'
+import { WinRtBackend } from './tts/winRtBackend'
+import type { ZoomStateService } from './zoomStateService'
 
 @Injectable({ providedIn: 'root' })
 export class AudioService {
@@ -32,11 +32,14 @@ export class AudioService {
 
     getBackend(id: TtsBackendId): TtsBackend {
         switch (id) {
-            case 'edge': return this.edge
-            case 'winrt': return this.winrt
-            case 'piper': return this.piper
-            case 'webspeech':
-            default: return this.webSpeech
+            case 'edge':
+                return this.edge
+            case 'winrt':
+                return this.winrt
+            case 'piper':
+                return this.piper
+            default:
+                return this.webSpeech
         }
     }
 
@@ -73,11 +76,19 @@ export class AudioService {
      * is the failure fallback for TTS so a misconfigured backend never silences
      * the plugin.
      */
-    speak(status: ClaudeStatusName, activityLogId?: string, ctx?: { metadata?: Record<string, any> | unknown; eventName?: string }): void {
+    speak(
+        status: ClaudeStatusName,
+        activityLogId?: string,
+        ctx?: { metadata?: Record<string, any> | unknown; eventName?: string },
+    ): void {
         const config = this.configService.getAudioConfig()
         if (!config.enabled) {
             if (activityLogId) {
-                this.activityLog.setAudioOutcome(activityLogId, 'suppressed-disabled', 'audio.enabled = false')
+                this.activityLog.setAudioOutcome(
+                    activityLogId,
+                    'suppressed-disabled',
+                    'audio.enabled = false',
+                )
             }
             return
         }
@@ -99,9 +110,10 @@ export class AudioService {
 
         // Dynamic mode is only narrated for done + question; everything else
         // falls through to the static phrase.
-        const dynamicCfg = isDynamicMode && (status === 'done' || status === 'question')
-            ? config.dynamic.perStatus[status]
-            : null
+        const dynamicCfg =
+            isDynamicMode && (status === 'done' || status === 'question')
+                ? config.dynamic.perStatus[status]
+                : null
 
         if (!staticPayload && !dynamicCfg?.enabled) {
             if (activityLogId) {
@@ -117,68 +129,77 @@ export class AudioService {
         Promise.all([
             this.zoomState.shouldMute(config),
             this.micState.shouldMute(config, config.mode),
-        ]).then(async ([zoomMute, micMute]) => {
-            if (zoomMute || micMute) {
-                const reason = zoomMute ? 'Zoom is active' : 'microphone is in use'
-                this.configService.debug(`Suppressing "${staticPayload}" — ${reason}`)
-                if (activityLogId) {
-                    this.activityLog.setAudioOutcome(
-                        activityLogId,
-                        zoomMute ? 'suppressed-zoom' : 'suppressed-mic',
-                        reason,
-                    )
-                }
-                return
-            }
-
-            if (dynamicCfg?.enabled) {
-                const phrase = await this.tryDynamicPhrase(status, dynamicCfg, ctx, config)
-                if (phrase) {
-                    this.speakText(phrase, config)
-                    if (config.systemBeep) this.playBeep(config.volume)
+        ]).then(
+            async ([zoomMute, micMute]) => {
+                if (zoomMute || micMute) {
+                    const reason = zoomMute ? 'Zoom is active' : 'microphone is in use'
+                    this.configService.debug(`Suppressing "${staticPayload}" — ${reason}`)
                     if (activityLogId) {
-                        this.activityLog.patchEntry(activityLogId, { audioPayload: phrase })
+                        this.activityLog.setAudioOutcome(
+                            activityLogId,
+                            zoomMute ? 'suppressed-zoom' : 'suppressed-mic',
+                            reason,
+                        )
+                    }
+                    return
+                }
+
+                if (dynamicCfg?.enabled) {
+                    const phrase = await this.tryDynamicPhrase(status, dynamicCfg, ctx, config)
+                    if (phrase) {
+                        this.speakText(phrase, config)
+                        if (config.systemBeep) this.playBeep(config.volume)
+                        if (activityLogId) {
+                            this.activityLog.patchEntry(activityLogId, { audioPayload: phrase })
+                            this.activityLog.setAudioOutcome(
+                                activityLogId,
+                                'announced',
+                                dynamicCfg.transcriptOnly
+                                    ? 'dynamic (transcript-only)'
+                                    : 'dynamic (haiku)',
+                            )
+                        }
+                        return
+                    }
+                    // Dynamic generation didn't yield a phrase — fall through to
+                    // the static phrase if there is one. Note the fallback in the
+                    // log so the user knows why they heard the boilerplate.
+                    if (!staticPayload) {
+                        if (activityLogId) {
+                            this.activityLog.setAudioOutcome(
+                                activityLogId,
+                                'suppressed-no-payload',
+                                'dynamic returned null and no static fallback configured',
+                            )
+                        }
+                        return
+                    }
+                    if (activityLogId) {
+                        this.activityLog.patchEntry(activityLogId, {
+                            audioOutcomeDetail: 'dynamic-fallback',
+                        })
+                    }
+                }
+
+                this.dispatchPlayback(isSoundMode, staticPayload!, config)
+                if (activityLogId) {
+                    this.activityLog.setAudioOutcome(activityLogId, 'announced')
+                }
+            },
+            (err) => {
+                console.warn('[claude-status] Mute probe failed, playing anyway:', err)
+                if (staticPayload) {
+                    this.dispatchPlayback(isSoundMode, staticPayload, config)
+                    if (activityLogId) {
                         this.activityLog.setAudioOutcome(
                             activityLogId,
                             'announced',
-                            dynamicCfg.transcriptOnly ? 'dynamic (transcript-only)' : 'dynamic (haiku)',
+                            'mute-probe failed; played anyway',
                         )
                     }
-                    return
                 }
-                // Dynamic generation didn't yield a phrase — fall through to
-                // the static phrase if there is one. Note the fallback in the
-                // log so the user knows why they heard the boilerplate.
-                if (!staticPayload) {
-                    if (activityLogId) {
-                        this.activityLog.setAudioOutcome(
-                            activityLogId,
-                            'suppressed-no-payload',
-                            'dynamic returned null and no static fallback configured',
-                        )
-                    }
-                    return
-                }
-                if (activityLogId) {
-                    this.activityLog.patchEntry(activityLogId, {
-                        audioOutcomeDetail: 'dynamic-fallback',
-                    })
-                }
-            }
-
-            this.dispatchPlayback(isSoundMode, staticPayload!, config)
-            if (activityLogId) {
-                this.activityLog.setAudioOutcome(activityLogId, 'announced')
-            }
-        }, err => {
-            console.warn('[claude-status] Mute probe failed, playing anyway:', err)
-            if (staticPayload) {
-                this.dispatchPlayback(isSoundMode, staticPayload, config)
-                if (activityLogId) {
-                    this.activityLog.setAudioOutcome(activityLogId, 'announced', 'mute-probe failed; played anyway')
-                }
-            }
-        })
+            },
+        )
     }
 
     /**
@@ -201,7 +222,7 @@ export class AudioService {
         config: ClaudeStatusAudioConfig,
     ): Promise<string | null> {
         const meta = ctx?.metadata as Record<string, any> | undefined
-        const transcriptPath = meta?.['transcript_path'] as string | undefined
+        const transcriptPath = meta?.transcript_path as string | undefined
         const transcript: TranscriptTail | undefined = transcriptPath
             ? this.transcriptReader.readTail(transcriptPath)
             : undefined
@@ -222,7 +243,11 @@ export class AudioService {
         return this.claudeApi.generatePhrase(phraseCtx, config.dynamic, statusCfg.promptTemplate)
     }
 
-    private dispatchPlayback(isSoundMode: boolean, payload: string, config: ClaudeStatusAudioConfig): void {
+    private dispatchPlayback(
+        isSoundMode: boolean,
+        payload: string,
+        config: ClaudeStatusAudioConfig,
+    ): void {
         if (isSoundMode) {
             this.soundService.play(payload, config.volume)
         } else {
@@ -253,7 +278,9 @@ export class AudioService {
         this.piper.configure(merged.piperExePath, merged.piperModelPath)
 
         const backend = this.getBackend(merged.backend)
-        const voiceId = merged.voicesByBackend[merged.backend] || (merged.backend === 'webspeech' ? merged.voiceName : '')
+        const voiceId =
+            merged.voicesByBackend[merged.backend] ||
+            (merged.backend === 'webspeech' ? merged.voiceName : '')
 
         const params: TtsSpeakParams = {
             text,
@@ -266,7 +293,10 @@ export class AudioService {
         try {
             await backend.speak(params)
         } catch (err) {
-            console.warn(`[claude-status] Backend "${merged.backend}" failed, falling back to Web Speech:`, err)
+            console.warn(
+                `[claude-status] Backend "${merged.backend}" failed, falling back to Web Speech:`,
+                err,
+            )
             if (backend.id !== 'webspeech') {
                 try {
                     // Voice ids are not comparable across backends (Edge uses

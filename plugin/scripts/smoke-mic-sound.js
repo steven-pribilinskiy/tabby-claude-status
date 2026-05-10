@@ -2,9 +2,9 @@
 // Smoke test for mic detection regex + sound listing logic.
 // Run: node scripts/smoke-mic-sound.js
 
-const { execFileSync } = require('child_process')
-const fs = require('fs')
-const path = require('path')
+const { execFileSync } = require('node:child_process')
+const fs = require('node:fs')
+const path = require('node:path')
 
 const ACTIVE_RE = /LastUsedTimeStop\s+REG_QWORD\s+0x0\b/i
 const PLAYABLE_RE = /\.(wav|mp3|ogg|m4a|aac)$/i
@@ -42,9 +42,14 @@ const root = path.join(process.env.SystemRoot || 'C:\\Windows', 'Media')
 try {
     const entries = fs
         .readdirSync(root, { withFileTypes: true })
-        .filter(e => e.isFile() && PLAYABLE_RE.test(e.name))
+        .filter((e) => e.isFile() && PLAYABLE_RE.test(e.name))
     console.log(`Sound files in ${root}: ${entries.length}`)
-    console.log(`First 3: ${entries.slice(0, 3).map(e => e.name).join(', ')}`)
+    console.log(
+        `First 3: ${entries
+            .slice(0, 3)
+            .map((e) => e.name)
+            .join(', ')}`,
+    )
 } catch (err) {
     console.error('Windows sounds enumeration failed:', err.message)
 }
@@ -64,14 +69,17 @@ console.log('=== Online catalog ===')
 const catalogPath = path.join(__dirname, '..', 'online-sounds', 'catalog.json')
 try {
     const parsed = JSON.parse(fs.readFileSync(catalogPath, 'utf-8'))
-    console.log(`Catalog version: ${parsed.version}, updated: ${parsed.updated}, sounds: ${(parsed.sounds || []).length}`)
+    console.log(
+        `Catalog version: ${parsed.version}, updated: ${parsed.updated}, sounds: ${(parsed.sounds || []).length}`,
+    )
 } catch (err) {
     console.error('Catalog read failed:', err.message)
 }
 
 console.log()
 console.log('=== Cache dir ===')
-const local = process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local')
+const local =
+    process.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local')
 const cacheDir = path.join(local, 'tabby-claude-status', 'sounds')
 console.log(`Cache dir: ${cacheDir}`)
 console.log(`Exists: ${fs.existsSync(cacheDir)}`)

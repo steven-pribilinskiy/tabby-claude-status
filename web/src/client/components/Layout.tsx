@@ -20,9 +20,7 @@ export function Layout() {
 			<nav className="w-52 border-r border-[var(--border)] flex flex-col overflow-hidden">
 				<div className="px-4 pt-4 pb-3 border-b border-[var(--border)] shrink-0">
 					<h1 className="text-base font-bold mb-0.5">tabby-claude-status</h1>
-					<div className="text-[11px] text-[var(--muted)]">
-						Tabby control panel
-					</div>
+					<div className="text-[11px] text-[var(--muted)]">Tabby control panel</div>
 				</div>
 				<div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-0.5">
 					{NAV.map((link) => (

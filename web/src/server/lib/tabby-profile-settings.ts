@@ -43,9 +43,7 @@ export async function readProfileSettings(): Promise<TabbyProfileSettingsFile> {
 	}
 }
 
-export async function writeProfileSettings(
-	settings: TabbyProfileSettingsFile,
-): Promise<void> {
+export async function writeProfileSettings(settings: TabbyProfileSettingsFile): Promise<void> {
 	const path = filePath();
 	const tmp = `${path}.tmp`;
 	await writeFile(tmp, `${JSON.stringify(settings, null, "\t")}\n`, "utf-8");
@@ -65,9 +63,7 @@ export async function upsertProfileSetting(
 	return current;
 }
 
-export async function deleteProfileSetting(
-	profileId: string,
-): Promise<TabbyProfileSettingsFile> {
+export async function deleteProfileSetting(profileId: string): Promise<TabbyProfileSettingsFile> {
 	const current = await readProfileSettings();
 	delete current.profiles[profileId];
 	await writeProfileSettings(current);

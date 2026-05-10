@@ -1,9 +1,8 @@
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { Injectable } from '@angular/core'
-import { ClaudeStatusName } from '../interfaces/types'
-
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
+import type { ClaudeStatusName } from '../interfaces/types'
 
 /**
  * On-disk JSON log of every Claude-status event the plugin has consumed.
@@ -88,7 +87,9 @@ export class StatusActivityLogService {
     /** Subscribe to entry-list changes. Returns an unsubscribe fn. */
     subscribe(fn: () => void): () => void {
         this.listeners.add(fn)
-        return () => { this.listeners.delete(fn) }
+        return () => {
+            this.listeners.delete(fn)
+        }
     }
 
     clear(): void {
@@ -123,7 +124,7 @@ export class StatusActivityLogService {
     }
 
     setAudioOutcome(id: string, outcome: AudioOutcome, detail?: string): void {
-        const entry = this.entries.find(e => e.id === id)
+        const entry = this.entries.find((e) => e.id === id)
         if (!entry) return
         entry.audioOutcome = outcome
         if (detail) entry.audioOutcomeDetail = detail
@@ -138,7 +139,7 @@ export class StatusActivityLogService {
      * records the event.
      */
     patchEntry(id: string, fields: Partial<ActivityLogEntry>): void {
-        const entry = this.entries.find(e => e.id === id)
+        const entry = this.entries.find((e) => e.id === id)
         if (!entry) return
         Object.assign(entry, fields)
         this.notify()
@@ -147,7 +148,11 @@ export class StatusActivityLogService {
 
     private notify(): void {
         for (const fn of this.listeners) {
-            try { fn() } catch { /* listener errors don't break the log */ }
+            try {
+                fn()
+            } catch {
+                /* listener errors don't break the log */
+            }
         }
     }
 
@@ -156,11 +161,18 @@ export class StatusActivityLogService {
         this.flushHandle = setTimeout(() => {
             this.flushHandle = null
             try {
-                fs.writeFileSync(ACTIVITY_LOG_FILE, JSON.stringify({
-                    version: 1,
-                    updated: Date.now(),
-                    entries: this.entries,
-                }, null, 2))
+                fs.writeFileSync(
+                    ACTIVITY_LOG_FILE,
+                    JSON.stringify(
+                        {
+                            version: 1,
+                            updated: Date.now(),
+                            entries: this.entries,
+                        },
+                        null,
+                        2,
+                    ),
+                )
             } catch (err) {
                 console.warn('[claude-status] Failed to flush activity log:', err)
             }

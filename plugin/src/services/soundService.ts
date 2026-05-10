@@ -1,11 +1,11 @@
+import * as fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
+import * as http from 'node:http'
+import * as https from 'node:https'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { URL as NodeURL } from 'node:url'
 import { Injectable } from '@angular/core'
-import * as fs from 'fs'
-import * as fsp from 'fs/promises'
-import * as os from 'os'
-import * as path from 'path'
-import * as https from 'https'
-import * as http from 'http'
-import { URL as NodeURL } from 'url'
 
 const ONLINE_CATALOG_TTL_MS = 24 * 60 * 60 * 1000 // 24 h
 
@@ -109,10 +109,10 @@ export class SoundService {
             const buffer = await fsp.readFile(filePath)
             // Web Audio happily plays WAV, MP3, OGG, M4A — exact MIME doesn't
             // matter much; Chromium sniffs the format. Pass a sane default.
-            const blob = new Blob([buffer.buffer.slice(
-                buffer.byteOffset,
-                buffer.byteOffset + buffer.byteLength,
-            )], { type: this.mimeFor(filePath) })
+            const blob = new Blob(
+                [buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)],
+                { type: this.mimeFor(filePath) },
+            )
             const url = URL.createObjectURL(blob)
 
             this.stopCurrent()
@@ -141,7 +141,9 @@ export class SoundService {
             try {
                 this.currentAudio.pause()
                 this.currentAudio.currentTime = 0
-            } catch { /* noop */ }
+            } catch {
+                /* noop */
+            }
             if (this.currentAudioUrl) URL.revokeObjectURL(this.currentAudioUrl)
             this.currentAudio = null
             this.currentAudioUrl = null
@@ -151,12 +153,15 @@ export class SoundService {
     private mimeFor(filePath: string): string {
         const ext = path.extname(filePath).toLowerCase()
         switch (ext) {
-            case '.mp3': return 'audio/mpeg'
-            case '.ogg': return 'audio/ogg'
+            case '.mp3':
+                return 'audio/mpeg'
+            case '.ogg':
+                return 'audio/ogg'
             case '.m4a':
-            case '.aac': return 'audio/aac'
-            case '.wav':
-            default: return 'audio/wav'
+            case '.aac':
+                return 'audio/aac'
+            default:
+                return 'audio/wav'
         }
     }
 
@@ -287,7 +292,7 @@ export class SoundService {
     async listOnlineCatalog(): Promise<OnlineSoundEntry[]> {
         const local = await this.readBundledCatalog()
         const cached = await this.readCachedCatalog()
-        if (cached && (!local || (cached.version >= local.version))) {
+        if (cached && (!local || cached.version >= local.version)) {
             return cached.sounds || []
         }
         return local?.sounds || []
@@ -338,7 +343,9 @@ export class SoundService {
             const parsed = new NodeURL(url)
             const ext = path.extname(parsed.pathname).toLowerCase()
             if (PLAYABLE_RE.test(ext)) return ext
-        } catch { /* fall through */ }
+        } catch {
+            /* fall through */
+        }
         return '.mp3'
     }
 
@@ -352,39 +359,51 @@ export class SoundService {
                 return
             }
             const client = parsed.protocol === 'http:' ? http : https
-            const req = client.get(url, { headers: { 'User-Agent': 'tabby-claude-status' } }, res => {
-                if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                    res.resume()
-                    if (redirectsLeft <= 0) {
-                        reject(new Error(`Too many redirects fetching ${url}`))
-                        return
-                    }
-                    const next = new NodeURL(res.headers.location, url).toString()
-                    this.downloadToFile(next, targetPath, redirectsLeft - 1).then(resolve, reject)
-                    return
-                }
-                if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
-                    res.resume()
-                    reject(new Error(`HTTP ${res.statusCode} fetching ${url}`))
-                    return
-                }
-                const tmpPath = `${targetPath}.partial`
-                const file = fs.createWriteStream(tmpPath)
-                res.pipe(file)
-                file.on('finish', () => {
-                    file.close(err => {
-                        if (err) {
-                            reject(err)
+            const req = client.get(
+                url,
+                { headers: { 'User-Agent': 'tabby-claude-status' } },
+                (res) => {
+                    if (
+                        res.statusCode &&
+                        res.statusCode >= 300 &&
+                        res.statusCode < 400 &&
+                        res.headers.location
+                    ) {
+                        res.resume()
+                        if (redirectsLeft <= 0) {
+                            reject(new Error(`Too many redirects fetching ${url}`))
                             return
                         }
-                        fsp.rename(tmpPath, targetPath).then(resolve, reject)
+                        const next = new NodeURL(res.headers.location, url).toString()
+                        this.downloadToFile(next, targetPath, redirectsLeft - 1).then(
+                            resolve,
+                            reject,
+                        )
+                        return
+                    }
+                    if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+                        res.resume()
+                        reject(new Error(`HTTP ${res.statusCode} fetching ${url}`))
+                        return
+                    }
+                    const tmpPath = `${targetPath}.partial`
+                    const file = fs.createWriteStream(tmpPath)
+                    res.pipe(file)
+                    file.on('finish', () => {
+                        file.close((err) => {
+                            if (err) {
+                                reject(err)
+                                return
+                            }
+                            fsp.rename(tmpPath, targetPath).then(resolve, reject)
+                        })
                     })
-                })
-                file.on('error', err => {
-                    fsp.unlink(tmpPath).catch(() => undefined)
-                    reject(err)
-                })
-            })
+                    file.on('error', (err) => {
+                        fsp.unlink(tmpPath).catch(() => undefined)
+                        reject(err)
+                    })
+                },
+            )
             req.on('error', reject)
             req.setTimeout(30_000, () => {
                 req.destroy(new Error(`Timeout fetching ${url}`))
@@ -411,14 +430,21 @@ export class SoundService {
      * Convenience: fetch every entry in the catalog whose file is not yet
      * present in the cache. Returns the count of newly downloaded files.
      */
-    async downloadAllMissing(): Promise<{ downloaded: number; failed: { entry: OnlineSoundEntry; error: string }[] }> {
+    async downloadAllMissing(): Promise<{
+        downloaded: number
+        failed: { entry: OnlineSoundEntry; error: string }[]
+    }> {
         const catalog = await this.listOnlineCatalog()
         let downloaded = 0
         const failed: { entry: OnlineSoundEntry; error: string }[] = []
         for (const entry of catalog) {
             try {
-                const before = fs.existsSync(path.join(this.getCacheDir(),
-                    `${entry.id.replace(/[^a-zA-Z0-9._-]/g, '_')}${this.guessExtension(entry.url)}`))
+                const before = fs.existsSync(
+                    path.join(
+                        this.getCacheDir(),
+                        `${entry.id.replace(/[^a-zA-Z0-9._-]/g, '_')}${this.guessExtension(entry.url)}`,
+                    ),
+                )
                 await this.downloadOnlineSound(entry)
                 if (!before) downloaded++
             } catch (err) {

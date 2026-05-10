@@ -1,12 +1,11 @@
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { Injectable, Optional } from '@angular/core'
-import { NotificationsService, ProfilesService } from 'tabby-core'
-import { TerminalService } from 'tabby-local'
-import { ClaudeStatusConfigService } from './configService'
-import { ClaudeSessionRecord } from '../interfaces/types'
-
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
+import type { NotificationsService, ProfilesService } from 'tabby-core'
+import type { TerminalService } from 'tabby-local'
+import type { ClaudeSessionRecord } from '../interfaces/types'
+import type { ClaudeStatusConfigService } from './configService'
 
 /**
  * On-disk location for persisted Claude sessions. Kept under Tabby's AppData
@@ -55,7 +54,9 @@ export class SessionRestoreService {
      * created before the profile-capture upgrade, and to capture the profile
      * on every tick even if hooks aren't wired beyond SessionStart.
      */
-    private liveProfileResolver: (sessionId: string) => { id?: string; name?: string; type?: string } | undefined = () => undefined
+    private liveProfileResolver: (
+        sessionId: string,
+    ) => { id?: string; name?: string; type?: string } | undefined = () => undefined
 
     /** Run id rotated every Tabby start. Records observed in the current run carry this id. */
     private currentRunId: string = SessionRestoreService.makeRunId()
@@ -98,7 +99,7 @@ export class SessionRestoreService {
         const priorRunIdFromFile = file.currentRunId ?? null
         this.previousRunId = priorRunIdFromFile
 
-        const hasLegacy = file.sessions.some(s => !s.closed && !s.runId)
+        const hasLegacy = file.sessions.some((s) => !s.closed && !s.runId)
         if (hasLegacy && !this.previousRunId) {
             this.previousRunId = `legacy-${Date.now().toString(36)}`
             for (const s of file.sessions) {
@@ -143,7 +144,7 @@ export class SessionRestoreService {
     getLiveTitle(sessionId: string): string | undefined {
         try {
             const t = this.liveTitleResolver(sessionId)
-            return t && t.trim() ? t : undefined
+            return t?.trim() ? t : undefined
         } catch {
             return undefined
         }
@@ -172,7 +173,7 @@ export class SessionRestoreService {
 
         const file = this.readFile()
         const now = Date.now()
-        const existing = file.sessions.find(s => s.sessionId === sessionId)
+        const existing = file.sessions.find((s) => s.sessionId === sessionId)
         if (existing) {
             existing.cwd = cwd
             if (title) existing.title = title
@@ -212,7 +213,7 @@ export class SessionRestoreService {
     markClosed(sessionId: string): void {
         if (!sessionId) return
         const file = this.readFile()
-        const existing = file.sessions.find(s => s.sessionId === sessionId)
+        const existing = file.sessions.find((s) => s.sessionId === sessionId)
         if (!existing) return
         if (existing.closed === true) return
         existing.closed = true
@@ -277,7 +278,7 @@ export class SessionRestoreService {
      */
     forget(sessionId: string): void {
         const file = this.readFile()
-        file.sessions = file.sessions.filter(s => s.sessionId !== sessionId)
+        file.sessions = file.sessions.filter((s) => s.sessionId !== sessionId)
         this.writeFile(file)
     }
 
@@ -317,7 +318,9 @@ export class SessionRestoreService {
         // Clamp to a sane range. 0 is allowed (user opt-out) but step is 0.1s
         // in the UI so the smallest non-zero value is 100ms.
         const cdDelayMs = Math.round(Math.max(0, Math.min(cfg.resumeCdDelaySec ?? 1.2, 10)) * 1000)
-        const openDelayMs = Math.round(Math.max(0, Math.min(cfg.resumeOpenDelaySec ?? 1.5, 30)) * 1000)
+        const openDelayMs = Math.round(
+            Math.max(0, Math.min(cfg.resumeOpenDelaySec ?? 1.5, 30)) * 1000,
+        )
 
         const profile = await this.resolveProfile(session)
 
@@ -339,12 +342,16 @@ export class SessionRestoreService {
             // the user's tab ends up at the profile's default cwd
             // instead of the session cwd.
             setTimeout(() => {
-                try { tab.sendInput(cdCmd) } catch (err) {
+                try {
+                    tab.sendInput(cdCmd)
+                } catch (err) {
                     console.error('[claude-status] cd sendInput failed:', err)
                     return
                 }
                 setTimeout(() => {
-                    try { tab.sendInput(resumeCmd) } catch (err) {
+                    try {
+                        tab.sendInput(resumeCmd)
+                    } catch (err) {
                         console.error('[claude-status] resume sendInput failed:', err)
                     }
                 }, cdDelayMs)
@@ -383,13 +390,13 @@ export class SessionRestoreService {
             const profiles = await this.profilesService.getProfiles()
             // Path 1 — exact profile id captured at SessionStart.
             if (session.profileId) {
-                const exact = profiles.find(p => p.id === session.profileId)
+                const exact = profiles.find((p) => p.id === session.profileId)
                 if (exact) return exact
             }
             // Path 2 — same profile type (Windows session falls back to a
             // Windows shell, WSL session to a WSL shell).
             if (session.profileType) {
-                const sameType = profiles.find(p => p.type === session.profileType)
+                const sameType = profiles.find((p) => p.type === session.profileType)
                 if (sameType) {
                     console.warn(
                         '[claude-status] Original profile not found for session',
@@ -411,8 +418,10 @@ export class SessionRestoreService {
             if (inferred) {
                 console.warn(
                     '[claude-status] Legacy session record has no profile metadata; inferred',
-                    inferred.name, '(' + inferred.type + ')',
-                    'from cwd', session.cwd,
+                    inferred.name,
+                    `(${inferred.type})`,
+                    'from cwd',
+                    session.cwd,
                 )
                 return inferred
             }
@@ -444,13 +453,17 @@ export class SessionRestoreService {
             // command; the dedicated `wsl` type is what newer Tabby
             // versions assign. Try both, then anything whose command
             // looks like wsl.exe.
-            return profiles.find(p => p.type === 'wsl')
-                || profiles.find(p => p.type === 'local'
-                    && /wsl(\.exe)?\b/i.test(p.options?.command || ''))
+            return (
+                profiles.find((p) => p.type === 'wsl') ||
+                profiles.find(
+                    (p) => p.type === 'local' && /wsl(\.exe)?\b/i.test(p.options?.command || ''),
+                )
+            )
         }
         if (isWindowsPath) {
-            return profiles.find(p => p.type === 'local'
-                && !/wsl(\.exe)?\b/i.test(p.options?.command || ''))
+            return profiles.find(
+                (p) => p.type === 'local' && !/wsl(\.exe)?\b/i.test(p.options?.command || ''),
+            )
         }
         return undefined
     }
@@ -460,7 +473,7 @@ export class SessionRestoreService {
      * run. Drives the "Active sessions" bucket in the settings UI.
      */
     activeSessions(): ClaudeSessionRecord[] {
-        return this.list().filter(s => !s.closed && s.runId === this.currentRunId)
+        return this.list().filter((s) => !s.closed && s.runId === this.currentRunId)
     }
 
     /**
@@ -471,7 +484,7 @@ export class SessionRestoreService {
     previousRunSessions(): ClaudeSessionRecord[] {
         if (!this.previousRunId) return []
         const prev = this.previousRunId
-        return this.list().filter(s => !s.closed && s.runId === prev)
+        return this.list().filter((s) => !s.closed && s.runId === prev)
     }
 
     /**
@@ -480,7 +493,7 @@ export class SessionRestoreService {
      * behaviour: pick up everything that wasn't explicitly closed.
      */
     openSessions(): ClaudeSessionRecord[] {
-        return this.list().filter(s => !s.closed)
+        return this.list().filter((s) => !s.closed)
     }
 
     /**
@@ -530,6 +543,6 @@ export class SessionRestoreService {
     private pruneInPlace(file: SessionsFile, retentionDays: number): void {
         if (!retentionDays || retentionDays <= 0) return
         const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
-        file.sessions = file.sessions.filter(s => s.lastSeen >= cutoff)
+        file.sessions = file.sessions.filter((s) => s.lastSeen >= cutoff)
     }
 }

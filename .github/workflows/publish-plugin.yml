@@ -1,13 +1,12 @@
 name: Publish plugin to npm
 
-# Triggered when a `plugin-v*` tag is pushed (e.g. `plugin-v1.2.1`). The
-# version in plugin/package.json must match the tag. Use a separate tag prefix
-# from the webapp so the two halves of this monorepo can release on their own
-# cadence.
+# Triggered when a `v*` tag is pushed (e.g. `v1.2.1`). The version in
+# plugin/package.json must match the tag. The webapp doesn't publish to npm,
+# so a single `v*` tag train is unambiguous.
 on:
   push:
     tags:
-      - "plugin-v*"
+      - "v*"
 
 permissions:
   contents: read
@@ -30,7 +29,7 @@ jobs:
       - name: Verify tag matches package.json version
         shell: bash
         run: |
-          tag_version="${GITHUB_REF_NAME#plugin-v}"
+          tag_version="${GITHUB_REF_NAME#v}"
           pkg_version="$(node -p "require('./package.json').version")"
           if [ "$tag_version" != "$pkg_version" ]; then
             echo "::error::tag $GITHUB_REF_NAME (-> $tag_version) does not match plugin/package.json version ($pkg_version)"
@@ -40,6 +39,14 @@ jobs:
 
       - name: Install dependencies (uses .npmrc legacy-peer-deps)
         run: npm ci
+
+      - name: Install root tooling (Biome)
+        working-directory: ${{ github.workspace }}
+        run: npm ci
+
+      - name: Lint + format check (Biome)
+        working-directory: ${{ github.workspace }}
+        run: npm run check
 
       - name: Type check
         run: npm run typecheck

@@ -1,9 +1,9 @@
 // hook.js — Claude Code hook handler (cross-platform)
 // Reads hook event JSON from stdin, writes status to temp file for Tabby plugin
-const fs = require('fs')
-const os = require('os')
-const path = require('path')
-const { execSync } = require('child_process')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const { execSync } = require('node:child_process')
 
 const STATUS_FILE = path.join(os.tmpdir(), 'tabby-claude-status.json')
 
@@ -20,11 +20,13 @@ function getAncestorPidsLinux(startPid, depth) {
         try {
             const stat = fs.readFileSync(`/proc/${current}/stat`, 'utf8')
             const match = stat.match(/\)\s+\S+\s+(\d+)/)
-            const parent = match ? parseInt(match[1]) : null
+            const parent = match ? parseInt(match[1], 10) : null
             if (!parent || parent <= 1) break
             pids.push(parent)
             current = parent
-        } catch (_) { break }
+        } catch (_) {
+            break
+        }
     }
     return pids
 }
@@ -41,11 +43,13 @@ function getAncestorPidsDarwin(startPid, depth) {
                 encoding: 'utf8',
                 timeout: 2000,
             })
-            const parent = parseInt(out.trim()) || null
+            const parent = parseInt(out.trim(), 10) || null
             if (!parent || parent <= 1) break
             pids.push(parent)
             current = parent
-        } catch (_) { break }
+        } catch (_) {
+            break
+        }
     }
     return pids
 }
@@ -93,7 +97,12 @@ $p=${startPid};for($i=0;$i -lt ${depth};$i++){$pp=[PT]::GetPPid($p);if($pp -le 1
         timeout: 5000,
         windowsHide: true,
     })
-    return out.trim().split(/\r?\n/).filter(Boolean).map(Number).filter(n => n > 1)
+    return out
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(Number)
+        .filter((n) => n > 1)
 }
 
 /** Slow fallback: WMI batch query (~2s) */
@@ -105,7 +114,12 @@ function getAncestorPidsWmiBatch(startPid, depth) {
         timeout: 15000,
         windowsHide: true,
     })
-    return out.trim().split(/\r?\n/).filter(Boolean).map(Number).filter(n => n > 1)
+    return out
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(Number)
+        .filter((n) => n > 1)
 }
 
 /**
@@ -113,9 +127,12 @@ function getAncestorPidsWmiBatch(startPid, depth) {
  */
 function getAncestorPids(startPid, depth) {
     switch (process.platform) {
-        case 'win32':  return getAncestorPidsWindows(startPid, depth)
-        case 'linux':  return getAncestorPidsLinux(startPid, depth)
-        default:       return getAncestorPidsDarwin(startPid, depth)
+        case 'win32':
+            return getAncestorPidsWindows(startPid, depth)
+        case 'linux':
+            return getAncestorPidsLinux(startPid, depth)
+        default:
+            return getAncestorPidsDarwin(startPid, depth)
     }
 }
 
@@ -126,7 +143,9 @@ const timeout = setTimeout(() => process.exit(0), safetyTimeout)
 
 let input = ''
 process.stdin.setEncoding('utf8')
-process.stdin.on('data', chunk => { input += chunk })
+process.stdin.on('data', (chunk) => {
+    input += chunk
+})
 process.stdin.on('end', () => {
     clearTimeout(timeout)
     try {
@@ -157,9 +176,10 @@ process.stdin.on('end', () => {
         // session→ancestors cache is populated for subsequent curl-only events.
         // Override via TABBY_CLAUDE_STATUS_WEBHOOK_URL.
         try {
-            const webhookUrl = process.env.TABBY_CLAUDE_STATUS_WEBHOOK_URL
-                || 'https://tabby-claude-status.lvh.me/api/claude/hook'
-            const https = require('https')
+            const webhookUrl =
+                process.env.TABBY_CLAUDE_STATUS_WEBHOOK_URL ||
+                'https://tabby-claude-status.lvh.me/api/claude/hook'
+            const https = require('node:https')
             const payload = JSON.stringify({
                 hook_event_name: name,
                 session_id: event.session_id || '',
@@ -181,7 +201,9 @@ process.stdin.on('end', () => {
             req.on('timeout', () => req.destroy())
             req.write(payload)
             req.end()
-        } catch (_) { /* server offline is fine */ }
+        } catch (_) {
+            /* server offline is fine */
+        }
     } catch (_) {
         // Silently ignore parse errors
     }

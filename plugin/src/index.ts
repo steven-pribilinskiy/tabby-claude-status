@@ -8,6 +8,6 @@
  */
 export { default } from './claudeStatusModule'
 export * from './interfaces/types'
-export { StatusParserService } from './services/statusParserService'
-export { ClaudeStatusConfigService } from './services/configService'
 export { AudioService } from './services/audioService'
+export { ClaudeStatusConfigService } from './services/configService'
+export { StatusParserService } from './services/statusParserService'

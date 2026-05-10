@@ -1,4 +1,4 @@
-import { TtsBackendId } from '../../interfaces/types'
+import type { TtsBackendId } from '../../interfaces/types'
 
 /**
  * A voice offered by a TTS backend. `id` is the identifier passed back to

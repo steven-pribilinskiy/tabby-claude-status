@@ -1,33 +1,43 @@
-import { Component, DoCheck, OnDestroy, OnInit } from '@angular/core'
-import { ConfigService } from 'tabby-core'
-import { AudioService } from '../services/audioService'
+import { Component, type DoCheck, type OnDestroy, type OnInit } from '@angular/core'
+import type { ConfigService } from 'tabby-core'
 import {
-    AudioMode,
-    ClaudeSessionRecord,
+    type AudioMode,
+    type ClaudeSessionRecord,
     DEFAULT_AUDIO_CONFIG,
     DEFAULT_CONFIG,
     DEFAULT_DISPLAY_CONFIG,
     DEFAULT_EMOJI_MAP,
     DEFAULT_SESSION_RESTORE_CONFIG,
-    TtsBackendId,
+    type TtsBackendId,
 } from '../interfaces/types'
-import { TtsBackend, TtsVoice } from '../services/tts/tts.interface'
-import { SessionRestoreService } from '../services/sessionRestoreService'
-import { PiperInstallerService, PiperVoiceCatalogEntry } from '../services/piperInstallerService'
-import { OnlineSoundEntry, SoundEntry, SoundService } from '../services/soundService'
-import { ActivityLogEntry, StatusActivityLogService } from '../services/statusActivityLogService'
-import { ClaudeApiService, ClaudeModelOption } from '../services/claudeApiService'
-import { ClaudeCredentialsService, CredentialsStatus } from '../services/claudeCredentialsService'
-import { TranscriptReaderService } from '../services/transcriptReaderService'
+import type { AudioService } from '../services/audioService'
+import type { ClaudeApiService, ClaudeModelOption } from '../services/claudeApiService'
+import type {
+    ClaudeCredentialsService,
+    CredentialsStatus,
+} from '../services/claudeCredentialsService'
+import type {
+    PiperInstallerService,
+    PiperVoiceCatalogEntry,
+} from '../services/piperInstallerService'
+import type { SessionRestoreService } from '../services/sessionRestoreService'
+import type { OnlineSoundEntry, SoundEntry, SoundService } from '../services/soundService'
+import type {
+    ActivityLogEntry,
+    StatusActivityLogService,
+} from '../services/statusActivityLogService'
+import type { TranscriptReaderService } from '../services/transcriptReaderService'
+import type { TtsVoice } from '../services/tts/tts.interface'
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PLUGIN_PACKAGE = require('../../package.json') as { version: string; homepage?: string }
 
-import * as fs from 'fs'
-import * as fsp from 'fs/promises'
-import * as os from 'os'
-import * as path from 'path'
-import { execFile, execFileSync, execSync } from 'child_process'
-import { promisify } from 'util'
+import { execFile, execFileSync } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
@@ -50,21 +60,27 @@ export interface HookLocationStatus {
 }
 
 const HOOK_EVENTS = [
-    'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
-    'Notification', 'Stop',
-    'UserPromptSubmit', 'PermissionRequest',
-    'SessionStart', 'SessionEnd',
+    'PreToolUse',
+    'PostToolUse',
+    'PostToolUseFailure',
+    'Notification',
+    'Stop',
+    'UserPromptSubmit',
+    'PermissionRequest',
+    'SessionStart',
+    'SessionEnd',
 ]
 
 interface BackendOption {
     id: TtsBackendId
     label: string
-    available: boolean | null  // null = still probing
+    available: boolean | null // null = still probing
     voices: TtsVoice[]
 }
 
 @Component({
-    styles: [`
+    styles: [
+        `
         .session-table th.actions-col,
         .session-table td.actions-col {
             width: 1px;
@@ -266,48 +282,11 @@ interface BackendOption {
             right: 0;
         }
 
-        /* Tabs nav across the top of the settings panel. */
-        .settings-tabs {
-            border-bottom: 1px solid var(--bs-border-color, rgba(128, 128, 128, 0.25));
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.25rem;
-            margin-bottom: 1rem;
-            padding: 0;
-            list-style: none;
-        }
-        .settings-tabs .nav-link {
-            cursor: pointer;
-            padding: 0.5rem 0.875rem;
-            border: 1px solid transparent;
-            border-bottom: none;
-            border-top-left-radius: 0.375rem;
-            border-top-right-radius: 0.375rem;
-            /* Use the theme's body color at reduced opacity so inactive tabs
-               stay legible on both Tabby's dark chrome (where
-               --bs-secondary-color renders as near-black on near-black) and
-               the lighter settings surface. currentColor + opacity adapts to
-               whichever theme is in play without needing per-theme overrides. */
-            color: inherit;
-            opacity: 0.55;
-            font-weight: 500;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            margin-bottom: -1px;
-        }
-        .settings-tabs .nav-link:hover {
-            color: inherit;
-            opacity: 0.85;
-            background-color: rgba(128, 128, 128, 0.12);
-        }
-        .settings-tabs .nav-link.active {
-            color: inherit;
-            opacity: 1;
-            background-color: var(--bs-body-bg, transparent);
-            border-color: var(--bs-border-color, rgba(128, 128, 128, 0.35));
-            border-bottom-color: var(--bs-body-bg, transparent);
-        }
+        /* Top-of-panel tabs use Tabby's standard nav-nav-tabs Bootstrap
+           markup so styling matches Tabby's own settings (Profiles/Advanced).
+           Only the badge tweak below stays — everything else comes from
+           Bootstrap. */
+        .settings-tabs { margin-bottom: 1rem; }
         .settings-tabs .tab-badge {
             background: rgba(128, 128, 128, 0.2);
             color: inherit;
@@ -422,7 +401,8 @@ interface BackendOption {
         .cs-loading .fa-spinner {
             opacity: 0.7;
         }
-    `],
+    `,
+    ],
     template: `
         <div class="container-fluid">
             <div class="d-flex align-items-center gap-2 mb-2">
@@ -438,10 +418,15 @@ interface BackendOption {
                 </a>
             </div>
 
-            <!-- Tab navigation -->
-            <ul class="settings-tabs">
-                <li *ngFor="let t of tabs">
-                    <a class="nav-link"
+            <!-- Tab navigation. Uses Tabby's standard nav-nav-tabs
+                 markup so the strip looks identical to Tabby's own
+                 Profiles/Advanced tabs (same border, same active state,
+                 follows theme automatically). -->
+            <ul class="nav nav-tabs settings-tabs" role="tablist">
+                <li *ngFor="let t of tabs" class="nav-item" role="presentation">
+                    <a href="javascript:void(0)"
+                       class="nav-link"
+                       role="tab"
                        [class.active]="activeTab === t.id"
                        (click)="activeTab = t.id">
                         <i class="fas {{t.icon}}"></i>
@@ -651,10 +636,6 @@ interface BackendOption {
                             <span class="form-check-label ms-1">Dynamic (Claude-generated)</span>
                         </label>
                     </div>
-                    <div class="form-text">
-                        Switching modes preserves your TTS phrases, sound mappings, and dynamic
-                        prompts — nothing is lost when you flip back.
-                    </div>
                 </div>
 
                 <!-- ===== DYNAMIC MODE ===== -->
@@ -705,11 +686,11 @@ interface BackendOption {
                         </span>
                     </div>
                     <p class="text-muted small mb-2">
-                        Claude Haiku 4.5 writes a short, context-aware announcement based on the
-                        actual hook event (last assistant message, tool name, etc.) — so you'll
-                        hear "tests passing" instead of "I'm done". Calls run async and are
-                        bounded by a per-status timeout; if the API is slow or fails, the static
-                        phrases below are spoken instead.
+                        {{currentDynamicModelLabel}} writes a short, context-aware announcement
+                        based on the actual hook event (last assistant message, tool name, etc.)
+                        — so you'll hear "tests passing" instead of "I'm done". Calls run async
+                        and are bounded by a per-status timeout; if the API is slow or fails, the
+                        static phrases are spoken instead.
                     </p>
 
                     <!-- Subscription status (primary auth path) -->
@@ -849,7 +830,8 @@ interface BackendOption {
                                 <span class="text-muted small ms-2">
                                     Falls back to "{{config.store.claudeStatus.audio.statusTexts[s]}}" on miss
                                 </span>
-                                <button class="btn btn-sm btn-outline-secondary ms-auto"
+                                <button *ngIf="!config.store.claudeStatus.audio.dynamic.perStatus[s].transcriptOnly"
+                                        class="btn btn-sm btn-outline-secondary ms-auto"
                                         type="button"
                                         [disabled]="dynamicTesting === s"
                                         (click)="testDynamicPhrase(s)">
@@ -904,11 +886,43 @@ interface BackendOption {
                         </div>
                     </div>
 
-                    <p class="text-muted small mt-2">
-                        Static fallback phrases live below — same UI as the TTS mode. They are
-                        spoken when dynamic generation fails, times out, or is disabled for the
-                        status.
-                    </p>
+                    <div class="mt-3" style="max-width: 900px">
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <h6 class="mb-0">Recent generated phrases</h6>
+                            <span class="badge text-bg-secondary">{{recentDynamicPhrases.length}}</span>
+                            <button class="btn btn-sm btn-link ms-auto" type="button"
+                                    (click)="refreshActivityLog()">
+                                <i class="fas fa-sync-alt me-1"></i>Refresh
+                            </button>
+                        </div>
+                        <div *ngIf="recentDynamicPhrases.length === 0" class="text-muted small">
+                            Nothing yet — trigger Claude to hear something.
+                        </div>
+                        <table *ngIf="recentDynamicPhrases.length > 0" class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th style="width: 90px">Time</th>
+                                    <th style="width: 90px">Status</th>
+                                    <th style="width: 140px">Source</th>
+                                    <th>Phrase</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr *ngFor="let e of recentDynamicPhrases">
+                                    <td><code class="small">{{formatActivityTime(e.ts)}}</code></td>
+                                    <td>
+                                        <span class="badge"
+                                              [style.background-color]="activityStatusColor(e.status) + ' !important'"
+                                              [style.color]="'#fff !important'">
+                                            {{e.status}}
+                                        </span>
+                                    </td>
+                                    <td class="small text-muted">{{e.audioOutcomeDetail || '—'}}</td>
+                                    <td class="small"><code>{{e.audioPayload}}</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- ===== TTS / DYNAMIC MODE (shares the TTS backend + statusTexts) ===== -->
@@ -1093,25 +1107,30 @@ interface BackendOption {
                     </label>
                 </div>
 
-                <!-- Status Phrases (TTS mode only) -->
-                <h6>Status Phrases</h6>
-                <p class="text-muted small">Leave blank to skip TTS for that status.</p>
-                <div class="row mb-3" *ngFor="let status of phraseStatuses">
-                    <div class="col-2">
-                        <label class="form-label text-capitalize">{{status}}</label>
+                <!-- Status Phrases (TTS mode only — hidden in dynamic mode,
+                     where per-status switches above already cover what
+                     fires, and the static fallback values live in
+                     audio.statusTexts even when not editable here). -->
+                <ng-container *ngIf="config.store.claudeStatus.audio.mode === 'tts'">
+                    <h6>Status Phrases</h6>
+                    <p class="text-muted small">Leave blank to skip TTS for that status.</p>
+                    <div class="row mb-3" *ngFor="let status of phraseStatuses">
+                        <div class="col-2">
+                            <label class="form-label text-capitalize">{{status}}</label>
+                        </div>
+                        <div class="col-6">
+                            <input
+                                type="text"
+                                class="form-control"
+                                [(ngModel)]="config.store.claudeStatus.audio.statusTexts[status]"
+                                (ngModelChange)="save()"
+                            />
+                        </div>
+                        <div class="col-2">
+                            <button class="btn btn-sm btn-outline-info" (click)="testSpeak(status)">Test</button>
+                        </div>
                     </div>
-                    <div class="col-6">
-                        <input
-                            type="text"
-                            class="form-control"
-                            [(ngModel)]="config.store.claudeStatus.audio.statusTexts[status]"
-                            (ngModelChange)="save()"
-                        />
-                    </div>
-                    <div class="col-2">
-                        <button class="btn btn-sm btn-outline-info" (click)="testSpeak(status)">Test</button>
-                    </div>
-                </div>
+                </ng-container>
                 </div><!-- /TTS mode -->
 
                 <!-- ===== SOUND MODE ===== -->
@@ -2456,10 +2475,18 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     catalogPreviewKey = ''
     private catalogPreviewAudio: HTMLAudioElement | null = null
     private languageDisplayNames: Intl.DisplayNames | null = (() => {
-        try { return new Intl.DisplayNames(['en'], { type: 'language' }) } catch { return null }
+        try {
+            return new Intl.DisplayNames(['en'], { type: 'language' })
+        } catch {
+            return null
+        }
     })()
     private regionDisplayNames: Intl.DisplayNames | null = (() => {
-        try { return new Intl.DisplayNames(['en'], { type: 'region' }) } catch { return null }
+        try {
+            return new Intl.DisplayNames(['en'], { type: 'region' })
+        } catch {
+            return null
+        }
     })()
     pluginVersion = PLUGIN_PACKAGE.version
     pluginHomepage = PLUGIN_PACKAGE.homepage || ''
@@ -2476,7 +2503,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     private resumeErrorTimer: ReturnType<typeof setTimeout> | null = null
 
     nodeInfo: { path: string | null; version: string | null; error: string | null } = {
-        path: null, version: null, error: null,
+        path: null,
+        version: null,
+        error: null,
     }
     osInfo = {
         platform: os.platform(),
@@ -2495,7 +2524,11 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
 
     readonly dynamicStatuses = ['done', 'question'] as const
     dynamicTesting: 'done' | 'question' | '' = ''
-    dynamicTestResult: { status: 'done' | 'question'; kind: 'ok' | 'error'; message: string } | null = null
+    dynamicTestResult: {
+        status: 'done' | 'question'
+        kind: 'ok' | 'error'
+        message: string
+    } | null = null
     credStatus: CredentialsStatus | null = null
 
     /** Populated by `refreshModels()` from the Anthropic /v1/models API.
@@ -2530,7 +2563,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         try {
             const v = localStorage.getItem('tabby-claude-status.historyMode')
             return v === 'flat' ? 'flat' : 'grouped'
-        } catch { return 'grouped' }
+        } catch {
+            return 'grouped'
+        }
     })()
     copiedKey = ''
     setupDropdownOpen = false
@@ -2558,55 +2593,64 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             event: 'SessionStart',
             statusLabel: 'working',
             statusColor: '#0d6efd',
-            purpose: 'Captures session id, cwd, and Tabby profile when a Claude Code session begins. Drives the "Open sessions" list above and seeds the tab as working.',
+            purpose:
+                'Captures session id, cwd, and Tabby profile when a Claude Code session begins. Drives the "Open sessions" list above and seeds the tab as working.',
         },
         {
             event: 'UserPromptSubmit',
             statusLabel: 'working',
             statusColor: '#0d6efd',
-            purpose: 'Fires when you press Enter on a prompt. Re-marks the tab as working in case you started a new turn.',
+            purpose:
+                'Fires when you press Enter on a prompt. Re-marks the tab as working in case you started a new turn.',
         },
         {
             event: 'PreToolUse',
             statusLabel: 'working',
             statusColor: '#0d6efd',
-            purpose: 'Fires before every tool call (Read, Edit, Bash, …). Keeps the tab indicator alive while Claude is mid-task.',
+            purpose:
+                'Fires before every tool call (Read, Edit, Bash, …). Keeps the tab indicator alive while Claude is mid-task.',
         },
         {
             event: 'PostToolUse',
             statusLabel: 'working',
             statusColor: '#0d6efd',
-            purpose: 'Fires after a tool call succeeds. Refreshes the working indicator with the latest tool name (shown in the tab title prefix when enabled).',
+            purpose:
+                'Fires after a tool call succeeds. Refreshes the working indicator with the latest tool name (shown in the tab title prefix when enabled).',
         },
         {
             event: 'PostToolUseFailure',
             statusLabel: 'error',
             statusColor: '#dc3545',
-            purpose: 'Fires when a tool call errors out. Marks the tab as error and (if enabled) speaks the error phrase.',
+            purpose:
+                'Fires when a tool call errors out. Marks the tab as error and (if enabled) speaks the error phrase.',
         },
         {
             event: 'Notification',
             statusLabel: 'question',
             statusColor: '#fd7e14',
-            purpose: 'Fires when Claude wants your attention without a permission prompt (e.g. permission timeout warning). Marks the tab as question and flashes the taskbar.',
+            purpose:
+                'Fires when Claude wants your attention without a permission prompt (e.g. permission timeout warning). Marks the tab as question and flashes the taskbar.',
         },
         {
             event: 'PermissionRequest',
             statusLabel: 'question',
             statusColor: '#fd7e14',
-            purpose: 'Fires when Claude needs you to approve a tool. Marks the tab as question and triggers the question phrase.',
+            purpose:
+                'Fires when Claude needs you to approve a tool. Marks the tab as question and triggers the question phrase.',
         },
         {
             event: 'Stop',
             statusLabel: 'done',
             statusColor: '#198754',
-            purpose: 'Fires when Claude finishes its turn. Marks the tab done and triggers the done phrase. Auto-resets to idle after the configured timeout.',
+            purpose:
+                'Fires when Claude finishes its turn. Marks the tab done and triggers the done phrase. Auto-resets to idle after the configured timeout.',
         },
         {
             event: 'SessionEnd',
             statusLabel: 'idle',
             statusColor: '#6c757d',
-            purpose: 'Fires when the Claude Code session ends (Ctrl+C, /quit, etc.). Moves the row from "Open sessions" to history.',
+            purpose:
+                'Fires when the Claude Code session ends (Ctrl+C, /quit, etc.). Moves the row from "Open sessions" to history.',
         },
     ]
     setupResult: { kind: 'ok' | 'error'; message: string } | null = null
@@ -2633,7 +2677,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         private soundService: SoundService,
         private activityLog: StatusActivityLogService,
         private claudeApi: ClaudeApiService,
-        private transcriptReader: TranscriptReaderService,
+        _transcriptReader: TranscriptReaderService,
         private credentialsService: ClaudeCredentialsService,
     ) {}
 
@@ -2649,10 +2693,14 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             this.config.store.claudeStatus.audio = { ...DEFAULT_AUDIO_CONFIG }
         }
         if (!this.config.store.claudeStatus.audio.statusTexts) {
-            this.config.store.claudeStatus.audio.statusTexts = { ...DEFAULT_AUDIO_CONFIG.statusTexts }
+            this.config.store.claudeStatus.audio.statusTexts = {
+                ...DEFAULT_AUDIO_CONFIG.statusTexts,
+            }
         }
         if (!this.config.store.claudeStatus.audio.soundsByStatus) {
-            this.config.store.claudeStatus.audio.soundsByStatus = { ...DEFAULT_AUDIO_CONFIG.soundsByStatus }
+            this.config.store.claudeStatus.audio.soundsByStatus = {
+                ...DEFAULT_AUDIO_CONFIG.soundsByStatus,
+            }
         }
         if (!this.config.store.claudeStatus.audio.voicesByBackend) {
             this.config.store.claudeStatus.audio.voicesByBackend = {}
@@ -2667,7 +2715,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         // Deep-merge so newly-added per-status entries appear without
         // clobbering user customizations.
         if (!this.config.store.claudeStatus.audio.dynamic) {
-            this.config.store.claudeStatus.audio.dynamic = JSON.parse(JSON.stringify(DEFAULT_AUDIO_CONFIG.dynamic))
+            this.config.store.claudeStatus.audio.dynamic = JSON.parse(
+                JSON.stringify(DEFAULT_AUDIO_CONFIG.dynamic),
+            )
         } else {
             const dyn = this.config.store.claudeStatus.audio.dynamic
             const def = DEFAULT_AUDIO_CONFIG.dynamic
@@ -2715,7 +2765,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
 
         this.refreshSessions()
 
-        this.backends = this.audioService.listAllBackends().map(b => ({
+        this.backends = this.audioService.listAllBackends().map((b) => ({
             id: b.id,
             label: b.label,
             available: null,
@@ -2725,7 +2775,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
 
         if (typeof window !== 'undefined' && window.speechSynthesis) {
             window.speechSynthesis.onvoiceschanged = () => {
-                const ws = this.backends.find(b => b.id === 'webspeech')
+                const ws = this.backends.find((b) => b.id === 'webspeech')
                 if (ws) this.probeBackend(ws)
             }
         }
@@ -2779,7 +2829,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         this.piperInstalled = this.piperInstaller.isInstalled()
         this.piperInstaller
             .detectInstallers()
-            .then(list => {
+            .then((list) => {
                 this.piperDetectedInstallers = list
             })
             .catch(() => {
@@ -2795,7 +2845,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         this.piperInstallError = ''
         this.piperInstallStatus = 'Starting install…'
         try {
-            const paths = await this.piperInstaller.install(p => {
+            const paths = await this.piperInstaller.install((p) => {
                 this.piperInstallStatus = p.message
             })
             // Auto-fill the plugin config with the paths we just installed.
@@ -2870,13 +2920,13 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         if (this.voiceLanguageFilterTouched) return
         const selectedId = this.getSelectedVoiceId()
         if (selectedId) {
-            const current = this.currentVoices.find(v => v.id === selectedId)
+            const current = this.currentVoices.find((v) => v.id === selectedId)
             if (current) {
                 this.voiceLanguageFilter = this.languageFamilyOf(current.locale)
                 return
             }
         }
-        const hasEnglish = this.currentVoices.some(v => this.languageFamilyOf(v.locale) === 'en')
+        const hasEnglish = this.currentVoices.some((v) => this.languageFamilyOf(v.locale) === 'en')
         this.voiceLanguageFilter = hasEnglish ? 'en' : ''
     }
 
@@ -2915,7 +2965,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
 
     get currentBackend(): BackendOption | undefined {
         const id = this.config.store.claudeStatus?.audio?.backend as TtsBackendId
-        return this.backends.find(b => b.id === id)
+        return this.backends.find((b) => b.id === id)
     }
 
     get currentVoices(): TtsVoice[] {
@@ -2958,16 +3008,20 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         const selectedId = this.getSelectedVoiceId()
         const passesFilter = (v: TtsVoice): boolean => {
             if (lang && this.languageFamilyOf(v.locale) !== lang) return false
-            if (text && !v.label.toLowerCase().includes(text)
-                && !(v.locale || '').toLowerCase().includes(text)) return false
+            if (
+                text &&
+                !v.label.toLowerCase().includes(text) &&
+                !(v.locale || '').toLowerCase().includes(text)
+            )
+                return false
             return true
         }
         let filtered = this.currentVoices.filter(passesFilter)
         this.filteredVoiceCount = filtered.length
 
         // Always keep the current selection visible so the caption renders.
-        if (selectedId && !filtered.some(v => v.id === selectedId)) {
-            const current = this.currentVoices.find(v => v.id === selectedId)
+        if (selectedId && !filtered.some((v) => v.id === selectedId)) {
+            const current = this.currentVoices.find((v) => v.id === selectedId)
             if (current) filtered = [current, ...filtered]
         }
 
@@ -2986,7 +3040,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         for (const v of filtered) {
             const key = v.locale || 'unknown'
             if (!groups.has(key)) groups.set(key, [])
-            groups.get(key)!.push(v)
+            groups.get(key)?.push(v)
         }
         const result: { groupLabel: string; voices: TtsVoice[] }[] = []
         for (const [locale, vs] of groups) {
@@ -3005,7 +3059,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         try {
             const name = this.languageDisplayNames?.of(code)
             if (name && name !== code) return name
-        } catch { /* fall through */ }
+        } catch {
+            /* fall through */
+        }
         return code
     }
 
@@ -3018,14 +3074,18 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             try {
                 const r = this.regionDisplayNames?.of(region.toUpperCase())
                 if (r) regionName = r
-            } catch { /* fall through */ }
+            } catch {
+                /* fall through */
+            }
             return `${langName} (${regionName}) — ${locale}`
         }
         return `${langName} — ${locale}`
     }
 
     getColor(status: string): string {
-        return this.config.store.claudeStatus.colors[status] || (DEFAULT_CONFIG.colors as any)[status]
+        return (
+            this.config.store.claudeStatus.colors[status] || (DEFAULT_CONFIG.colors as any)[status]
+        )
     }
 
     setColor(status: string, color: string): void {
@@ -3034,7 +3094,10 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     }
 
     getEmoji(status: string): string {
-        return this.config.store.claudeStatus.display.titleEmojiMap?.[status] ?? (DEFAULT_EMOJI_MAP as any)[status]
+        return (
+            this.config.store.claudeStatus.display.titleEmojiMap?.[status] ??
+            (DEFAULT_EMOJI_MAP as any)[status]
+        )
     }
 
     setEmoji(status: string, value: string): void {
@@ -3098,9 +3161,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
      */
     get visibleBackends(): BackendOption[] {
         if (process.platform === 'win32') {
-            const winrt = this.backends.find(b => b.id === 'winrt')
+            const winrt = this.backends.find((b) => b.id === 'winrt')
             if (winrt && winrt.available !== false) {
-                return this.backends.filter(b => b.id !== 'webspeech')
+                return this.backends.filter((b) => b.id !== 'webspeech')
             }
         }
         return this.backends
@@ -3208,9 +3271,12 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                 this.soundService.listWindowsSounds(),
             ])
             const groups: { groupLabel: string; sounds: SoundEntry[] }[] = []
-            if (bundled.length) groups.push({ groupLabel: `Bundled (${bundled.length})`, sounds: bundled })
-            if (cached.length) groups.push({ groupLabel: `Downloaded (${cached.length})`, sounds: cached })
-            if (windows.length) groups.push({ groupLabel: `Windows (${windows.length})`, sounds: windows })
+            if (bundled.length)
+                groups.push({ groupLabel: `Bundled (${bundled.length})`, sounds: bundled })
+            if (cached.length)
+                groups.push({ groupLabel: `Downloaded (${cached.length})`, sounds: cached })
+            if (windows.length)
+                groups.push({ groupLabel: `Windows (${windows.length})`, sounds: windows })
             this.soundGroups = groups
             this.soundCacheDir = this.soundService.getCacheDir()
         } finally {
@@ -3237,7 +3303,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         const id = this.getSelectedSoundId(status)
         if (!id) return ''
         for (const group of this.soundGroups) {
-            const hit = group.sounds.find(s => s.id === id)
+            const hit = group.sounds.find((s) => s.id === id)
             if (hit) return hit.label
         }
         // Custom path that's not in any group — show the file name.
@@ -3316,7 +3382,8 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         try {
             this.piperCatalog = await this.piperInstaller.fetchVoiceCatalog()
             if (this.piperCatalog.length === 0) {
-                this.piperCatalogError = 'Voice catalog returned no entries — Hugging Face may be unreachable.'
+                this.piperCatalogError =
+                    'Voice catalog returned no entries — Hugging Face may be unreachable.'
             }
         } catch (err) {
             this.piperCatalogError = err instanceof Error ? err.message : String(err)
@@ -3345,15 +3412,23 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         try {
             const audio = new Audio(entry.sampleUrl)
             audio.preload = 'auto'
-            audio.addEventListener('ended', () => {
-                if (this.catalogPreviewAudio === audio) this.stopPiperVoicePreview()
-            }, { once: true })
-            audio.addEventListener('error', () => {
-                if (this.catalogPreviewAudio === audio) this.stopPiperVoicePreview()
-            }, { once: true })
+            audio.addEventListener(
+                'ended',
+                () => {
+                    if (this.catalogPreviewAudio === audio) this.stopPiperVoicePreview()
+                },
+                { once: true },
+            )
+            audio.addEventListener(
+                'error',
+                () => {
+                    if (this.catalogPreviewAudio === audio) this.stopPiperVoicePreview()
+                },
+                { once: true },
+            )
             this.catalogPreviewAudio = audio
             this.catalogPreviewKey = entry.key
-            void audio.play().catch(err => {
+            void audio.play().catch((err) => {
                 console.warn('[claude-status] Piper voice preview failed:', err)
                 this.stopPiperVoicePreview()
             })
@@ -3367,7 +3442,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             try {
                 this.catalogPreviewAudio.pause()
                 this.catalogPreviewAudio.src = ''
-            } catch { /* noop */ }
+            } catch {
+                /* noop */
+            }
             this.catalogPreviewAudio = null
         }
         this.catalogPreviewKey = ''
@@ -3411,7 +3488,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     get filteredPiperCatalog(): PiperVoiceCatalogEntry[] {
         const text = this.piperCatalogTextFilter.trim().toLowerCase()
         const lang = this.piperCatalogLanguageFilter
-        return this.piperCatalog.filter(v => {
+        return this.piperCatalog.filter((v) => {
             if (lang && v.languageFamily !== lang && v.languageCode !== lang) return false
             if (text) {
                 const hay = `${v.key} ${v.name} ${v.language}`.toLowerCase()
@@ -3439,16 +3516,14 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
      *    the new file without a Tabby restart,
      *  - the per-voice progress text is reset.
      */
-    async downloadPiperVoice(
-        entry: PiperVoiceCatalogEntry,
-    ): Promise<void> {
+    async downloadPiperVoice(entry: PiperVoiceCatalogEntry): Promise<void> {
         this.piperDownloadingKey = entry.key
         this.piperDownloadStatus = ''
         this.piperCatalogError = ''
         try {
-            await this.piperInstaller.downloadVoice(entry, p => {
+            await this.piperInstaller.downloadVoice(entry, (p) => {
                 if (p.bytesTotal) {
-                    const pct = Math.floor((p.bytesReceived || 0) / p.bytesTotal * 100)
+                    const pct = Math.floor(((p.bytesReceived || 0) / p.bytesTotal) * 100)
                     this.piperDownloadStatus = `${pct}%`
                 } else {
                     this.piperDownloadStatus = '…'
@@ -3470,7 +3545,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
      * so getSelectedVoiceId()'s Piper-fallback to piperModelPath kicks in.
      */
     usePiperVoice(key: string): void {
-        const installed = this.piperInstaller.listInstalledVoices().find(v => v.key === key)
+        const installed = this.piperInstaller.listInstalledVoices().find((v) => v.key === key)
         if (!installed) return
         this.config.store.claudeStatus.audio.piperModelPath = installed.modelPath
         this.config.store.claudeStatus.audio.voicesByBackend = {
@@ -3500,7 +3575,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         ;(piper as any).configure?.(audio.piperExePath, audio.piperModelPath)
         try {
             const voices = await piper.listVoices()
-            const target = this.backends.find(b => b.id === 'piper')
+            const target = this.backends.find((b) => b.id === 'piper')
             if (target) target.voices = voices
         } catch (err) {
             console.warn('[claude-status] reloadPiperVoices failed:', err)
@@ -3531,7 +3606,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             this.downloadAllResult =
                 failedCount === 0
                     ? `Downloaded ${result.downloaded} new sound${result.downloaded === 1 ? '' : 's'}.`
-                    : `Downloaded ${result.downloaded}, ${failedCount} failed (${result.failed.map(f => f.entry.label).join(', ')}).`
+                    : `Downloaded ${result.downloaded}, ${failedCount} failed (${result.failed.map((f) => f.entry.label).join(', ')}).`
         } catch (err) {
             this.onlineCatalogError = err instanceof Error ? err.message : String(err)
         } finally {
@@ -3546,7 +3621,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         const safeId = entry.id.replace(/[^a-zA-Z0-9._-]/g, '_')
         for (const group of this.soundGroups) {
             if (!group.groupLabel.startsWith('Downloaded')) continue
-            if (group.sounds.some(s => path.basename(s.id, path.extname(s.id)) === safeId)) {
+            if (group.sounds.some((s) => path.basename(s.id, path.extname(s.id)) === safeId)) {
                 return true
             }
         }
@@ -3559,7 +3634,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         const safeId = entry.id.replace(/[^a-zA-Z0-9._-]/g, '_')
         for (const group of this.soundGroups) {
             if (!group.groupLabel.startsWith('Downloaded')) continue
-            const hit = group.sounds.find(s => path.basename(s.id, path.extname(s.id)) === safeId)
+            const hit = group.sounds.find((s) => path.basename(s.id, path.extname(s.id)) === safeId)
             if (hit) {
                 this.audioService.testPlaySound(hit.path)
                 return
@@ -3569,7 +3644,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         try {
             const audio = new Audio(url)
             audio.volume = this.config.store.claudeStatus.audio.volume
-            audio.play().catch(err => {
+            audio.play().catch((err) => {
                 this.onlineCatalogError = `Preview failed: ${err.message || err}`
             })
         } catch (err) {
@@ -3596,12 +3671,12 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     }
 
     get closedSessions(): ClaudeSessionRecord[] {
-        return this.sessions.filter(s => !!s.closed)
+        return this.sessions.filter((s) => !!s.closed)
     }
 
     /** Active + previous-run combined — used by the bulk "Mark all as closed" action. */
     get openSessions(): ClaudeSessionRecord[] {
-        return this.sessions.filter(s => !s.closed)
+        return this.sessions.filter((s) => !s.closed)
     }
 
     get filteredActiveSessions(): ClaudeSessionRecord[] {
@@ -3622,14 +3697,24 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
      * render history collapsibly per folder so dozens of sessions in the
      * same project don't dominate the list.
      */
-    get groupedClosedSessions(): { cwd: string; basename: string; lastSeen: number; sessions: ClaudeSessionRecord[] }[] {
+    get groupedClosedSessions(): {
+        cwd: string
+        basename: string
+        lastSeen: number
+        sessions: ClaudeSessionRecord[]
+    }[] {
         const byCwd = new Map<string, ClaudeSessionRecord[]>()
         for (const s of this.filteredClosedSessions) {
             const key = s.cwd || '(unknown)'
             if (!byCwd.has(key)) byCwd.set(key, [])
-            byCwd.get(key)!.push(s)
+            byCwd.get(key)?.push(s)
         }
-        const groups: { cwd: string; basename: string; lastSeen: number; sessions: ClaudeSessionRecord[] }[] = []
+        const groups: {
+            cwd: string
+            basename: string
+            lastSeen: number
+            sessions: ClaudeSessionRecord[]
+        }[] = []
         for (const [cwd, sessions] of byCwd) {
             sessions.sort((a, b) => b.lastSeen - a.lastSeen)
             groups.push({
@@ -3662,7 +3747,11 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
 
     setHistoryMode(mode: 'grouped' | 'flat'): void {
         this.historyMode = mode
-        try { localStorage.setItem('tabby-claude-status.historyMode', mode) } catch { /* localStorage may be disabled */ }
+        try {
+            localStorage.setItem('tabby-claude-status.historyMode', mode)
+        } catch {
+            /* localStorage may be disabled */
+        }
     }
 
     /** ngFor trackBy for the history accordion. Without this the *ngFor
@@ -3682,11 +3771,11 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     private applySessionFilter(list: ClaudeSessionRecord[]): ClaudeSessionRecord[] {
         const q = this.sessionFilter.trim().toLowerCase()
         if (!q) return list
-        return list.filter(s => {
+        return list.filter((s) => {
             const title = this.displayTitle(s)
             return (
-                (s.cwd && s.cwd.toLowerCase().includes(q)) ||
-                (s.sessionId && s.sessionId.toLowerCase().includes(q)) ||
+                s.cwd?.toLowerCase().includes(q) ||
+                s.sessionId?.toLowerCase().includes(q) ||
                 (!!title && title.toLowerCase().includes(q))
             )
         })
@@ -3750,7 +3839,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                 electron.clipboard.writeText(text)
                 copied = true
             }
-        } catch { /* fall through */ }
+        } catch {
+            /* fall through */
+        }
 
         // Path 2 — @electron/remote, which Tabby always loads. Exposes
         // the same clipboard module via its main-process bridge.
@@ -3763,7 +3854,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                     cb.writeText(text)
                     copied = true
                 }
-            } catch { /* fall through */ }
+            } catch {
+                /* fall through */
+            }
         }
 
         // Path 3 — async navigator.clipboard. Requires a secure context
@@ -3774,7 +3867,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             try {
                 navigator.clipboard.writeText(text)
                 copied = true
-            } catch { /* fall through */ }
+            } catch {
+                /* fall through */
+            }
         }
 
         // Path 4 — last-resort document.execCommand('copy'). Deprecated
@@ -3789,7 +3884,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                 ta.select()
                 copied = document.execCommand('copy')
                 document.body.removeChild(ta)
-            } catch { /* nothing else to try */ }
+            } catch {
+                /* nothing else to try */
+            }
         }
 
         if (!copied) {
@@ -3886,11 +3983,8 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             // surface it as a synthetic option so the dropdown still selects
             // their value rather than silently switching to the first entry.
             const stored = cfg.model
-            if (stored && !models.find(m => m.id === stored)) {
-                this.availableModels = [
-                    { id: stored, displayName: `${stored} (saved)` },
-                    ...models,
-                ]
+            if (stored && !models.find((m) => m.id === stored)) {
+                this.availableModels = [{ id: stored, displayName: `${stored} (saved)` }, ...models]
             }
         } finally {
             this.modelsLoading = false
@@ -3944,9 +4038,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
 
             // Try to find the most recent matching entry in the activity log
             // for realistic context; fall back to a synthesized payload.
-            const recent = this.activityLog.list().find(e =>
-                e.status === status && e.metadata,
-            )
+            const recent = this.activityLog.list().find((e) => e.status === status && e.metadata)
             const ctx = {
                 status,
                 eventName: recent?.eventName ?? (status === 'done' ? 'Stop' : 'PermissionRequest'),
@@ -3954,24 +4046,21 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                 transcript: undefined as any,
             }
 
-            let phrase: string | null = null
-            if (statusCfg.transcriptOnly) {
-                this.dynamicTestResult = {
-                    status,
-                    kind: 'error',
-                    message: 'Transcript-only mode requires a live hook event — trigger Claude and watch the activity log instead.',
-                }
-                return
-            }
-            phrase = await this.claudeApi.generatePhrase(ctx, cfg, statusCfg.promptTemplate)
+            // Test button is hidden when transcriptOnly is true (the
+            // template gates the button on !transcriptOnly), so this path
+            // only runs for the API-backed prompt-template flow.
+            const phrase = await this.claudeApi.generatePhrase(ctx, cfg, statusCfg.promptTemplate)
             if (phrase) {
                 this.dynamicTestResult = { status, kind: 'ok', message: phrase }
-                this.audioService.speakText(phrase, audio).catch(() => { /* preview is best-effort */ })
+                this.audioService.speakText(phrase, audio).catch(() => {
+                    /* preview is best-effort */
+                })
             } else {
                 this.dynamicTestResult = {
                     status,
                     kind: 'error',
-                    message: 'API call failed or timed out. Check your API key, model id, and timeout setting.',
+                    message:
+                        'API call failed or timed out. Check your API key, model id, and timeout setting.',
                 }
             }
         } catch (err: any) {
@@ -3991,6 +4080,30 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         this.activityEntries = this.activityLog.list()
     }
 
+    /** Successfully-generated dynamic phrases shown in the Audio tab.
+     *  Excludes static-fallback playbacks (audioOutcomeDetail contains
+     *  'fallback') so the user only sees what the model actually wrote. */
+    get recentDynamicPhrases(): ActivityLogEntry[] {
+        return this.activityEntries
+            .filter(
+                (e) =>
+                    e.audioMode === 'dynamic' &&
+                    !!e.audioPayload &&
+                    e.audioOutcome === 'announced' &&
+                    !(e.audioOutcomeDetail || '').includes('fallback'),
+            )
+            .slice(0, 20)
+    }
+
+    /** Display label for the model currently configured for dynamic
+     *  generation. Falls back to the raw id, then a generic phrase, so
+     *  the intro paragraph never reads "undefined writes…". */
+    get currentDynamicModelLabel(): string {
+        const id = this.config.store.claudeStatus.audio.dynamic.model
+        const match = this.availableModels.find((m) => m.id === id)
+        return match?.displayName || id || 'The configured model'
+    }
+
     clearActivityLog(): void {
         this.activityLog.clear()
         this.activityEntries = []
@@ -4002,20 +4115,31 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             const { clipboard } = require('electron')
             clipboard.writeText(this.activityLogPath)
         } catch {
-            try { (navigator as any).clipboard?.writeText(this.activityLogPath) } catch { /* noop */ }
+            try {
+                ;(navigator as any).clipboard?.writeText(this.activityLogPath)
+            } catch {
+                /* noop */
+            }
         }
     }
 
     get filteredActivityEntries(): ActivityLogEntry[] {
         const text = this.activityTextFilter.trim().toLowerCase()
-        return this.activityEntries.filter(e => {
+        return this.activityEntries.filter((e) => {
             if (this.activityFilter && e.status !== this.activityFilter) return false
             if (!text) return true
             const haystack = [
-                e.eventName, e.session, e.audioPayload,
-                e.audioOutcome, e.audioOutcomeDetail, e.terminalTitle,
+                e.eventName,
+                e.session,
+                e.audioPayload,
+                e.audioOutcome,
+                e.audioOutcomeDetail,
+                e.terminalTitle,
                 JSON.stringify(e.metadata || {}),
-            ].filter(Boolean).join(' ').toLowerCase()
+            ]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase()
             return haystack.includes(text)
         })
     }
@@ -4031,7 +4155,10 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         lines.push(`${new Date(entry.ts).toLocaleString()} — ${entry.status}`)
         if (entry.eventName) lines.push(`event: ${entry.eventName}`)
         if (entry.source) lines.push(`source: ${entry.source}`)
-        if (entry.audioOutcome) lines.push(`audio: ${entry.audioOutcome}${entry.audioOutcomeDetail ? ' — ' + entry.audioOutcomeDetail : ''}`)
+        if (entry.audioOutcome)
+            lines.push(
+                `audio: ${entry.audioOutcome}${entry.audioOutcomeDetail ? ` — ${entry.audioOutcomeDetail}` : ''}`,
+            )
         if (entry.session) lines.push(`session: ${entry.session}`)
         if (entry.metadata) lines.push(`meta: ${JSON.stringify(entry.metadata)}`)
         return lines.join('\n')
@@ -4049,7 +4176,12 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     }
 
     async resumeSession(session: ClaudeSessionRecord): Promise<void> {
-        console.info('[claude-status] Resume clicked for session', session.sessionId, 'cwd:', session.cwd)
+        console.info(
+            '[claude-status] Resume clicked for session',
+            session.sessionId,
+            'cwd:',
+            session.cwd,
+        )
         const result = await this.sessionRestore.resumeSession(session, 'resume')
         this.handleResumeResult(result)
     }
@@ -4077,7 +4209,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         const cmd = extra
             ? `cd ${quotedCwd} && claude --resume ${session.sessionId}${forkFlag} ${extra}`
             : `cd ${quotedCwd} && claude --resume ${session.sessionId}${forkFlag}`
-        this.copyToClipboard(cmd, 'cmd-' + session.sessionId)
+        this.copyToClipboard(cmd, `cmd-${session.sessionId}`)
         this.resumeDropdownOpenFor = ''
     }
 
@@ -4244,7 +4376,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                 }
             }
             this.hookLocations = initial
-            const stillPresent = initial.find(l => l.label === this.activeHookLocation)
+            const stillPresent = initial.find((l) => l.label === this.activeHookLocation)
             if (!stillPresent) {
                 this.activeHookLocation = initial[0]?.label || ''
             }
@@ -4254,29 +4386,32 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             // update immediately, instead of all snapping at the end.
             const replace = (label: string, next: HookLocationStatus): void => {
                 next.isLoading = false
-                this.hookLocations = this.hookLocations.map(l => l.label === label ? next : l)
+                this.hookLocations = this.hookLocations.map((l) => (l.label === label ? next : l))
             }
 
             const probes: Promise<void>[] = []
             probes.push(
-                this.analyseSettingsFileAsync('Windows', windowsPath)
-                    .then(r => replace('Windows', r)),
+                this.analyseSettingsFileAsync('Windows', windowsPath).then((r) =>
+                    replace('Windows', r),
+                ),
             )
             for (const d of distros) {
-                probes.push((async () => {
-                    const settingsPath = await this.findWslSettingsPathAsync(d)
-                    const next = settingsPath
-                        ? await this.analyseSettingsFileAsync(`WSL ${d}`, settingsPath)
-                        : {
-                            label: `WSL ${d}`,
-                            path: `\\\\wsl.localhost\\${d}\\home\\<user>\\.claude\\settings.json`,
-                            state: 'no-file' as const,
-                            totalEvents: HOOK_EVENTS.length,
-                            configuredEvents: 0,
-                            missingEvents: [...HOOK_EVENTS],
-                        }
-                    replace(`WSL ${d}`, next)
-                })())
+                probes.push(
+                    (async () => {
+                        const settingsPath = await this.findWslSettingsPathAsync(d)
+                        const next = settingsPath
+                            ? await this.analyseSettingsFileAsync(`WSL ${d}`, settingsPath)
+                            : {
+                                  label: `WSL ${d}`,
+                                  path: `\\\\wsl.localhost\\${d}\\home\\<user>\\.claude\\settings.json`,
+                                  state: 'no-file' as const,
+                                  totalEvents: HOOK_EVENTS.length,
+                                  configuredEvents: 0,
+                                  missingEvents: [...HOOK_EVENTS],
+                              }
+                        replace(`WSL ${d}`, next)
+                    })(),
+                )
             }
             await Promise.all(probes)
 
@@ -4285,10 +4420,10 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             // state — it's just absent, and treating it as a problem
             // would make the badge yellow forever for users who only run
             // Claude Code on one of their distros.
-            const meaningful = this.hookLocations.filter(l => l.state !== 'no-file')
-            const anyError = meaningful.some(l => l.state === 'error')
-            const allOk = meaningful.length > 0 && meaningful.every(l => l.state === 'ok')
-            const anyConfigured = meaningful.some(l => l.configuredEvents > 0)
+            const meaningful = this.hookLocations.filter((l) => l.state !== 'no-file')
+            const anyError = meaningful.some((l) => l.state === 'error')
+            const allOk = meaningful.length > 0 && meaningful.every((l) => l.state === 'ok')
+            const anyConfigured = meaningful.some((l) => l.configuredEvents > 0)
             if (allOk) {
                 this.hooksStatus = 'ok'
             } else if (anyError) {
@@ -4314,15 +4449,16 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
      */
     isHookEventConfigured(event: string): boolean {
         return this.hookLocations.some(
-            loc => loc.state !== 'no-file'
-                && loc.state !== 'error'
-                && !loc.missingEvents.includes(event),
+            (loc) =>
+                loc.state !== 'no-file' &&
+                loc.state !== 'error' &&
+                !loc.missingEvents.includes(event),
         )
     }
 
     /** Currently-selected location for the Hooks sub-tab view. */
     get currentHookLocation(): HookLocationStatus | null {
-        return this.hookLocations.find(l => l.label === this.activeHookLocation) || null
+        return this.hookLocations.find((l) => l.label === this.activeHookLocation) || null
     }
 
     /**
@@ -4368,14 +4504,14 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                 throw err
             }
             const settings = JSON.parse(raw)
-            const hooks = (settings && settings.hooks) || {}
+            const hooks = settings?.hooks || {}
             const missing: string[] = []
             let configured = 0
             for (const event of HOOK_EVENTS) {
                 const groups: any[] = hooks[event] || []
                 const hit = groups.some((group: any) => {
-                    const inner: any[] = (group && group.hooks) || []
-                    return inner.some(h => this.isTabbyHookCommand(h && h.command))
+                    const inner: any[] = group?.hooks || []
+                    return inner.some((h) => this.isTabbyHookCommand(h?.command))
                 })
                 if (hit) configured++
                 else missing.push(event)
@@ -4443,11 +4579,12 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     }
 
     private async detectWslDistros(): Promise<string[]> {
-        const parse = (raw: string): string[] => raw
-            .split(/\r?\n/)
-            .map(s => s.replace(/\0/g, '').trim())
-            .filter(Boolean)
-            .filter(d => !/^(rancher-desktop|docker-desktop)/i.test(d))
+        const parse = (raw: string): string[] =>
+            raw
+                .split(/\r?\n/)
+                .map((s) => s.replace(/\0/g, '').trim())
+                .filter(Boolean)
+                .filter((d) => !/^(rancher-desktop|docker-desktop)/i.test(d))
 
         // Primary path: promisified execFile. utf16le matches wsl.exe's
         // BOM-prefixed UTF-16 output.
@@ -4533,7 +4670,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         // take the first hit. `Promise.all` keeps the wall time at the
         // slowest UNC stat instead of summing them.
         const probes = await Promise.all(
-            users.map(async user => {
+            users.map(async (user) => {
                 const candidate = path.join(homeRoot, user, '.claude', 'settings.json')
                 try {
                     await fsp.access(candidate, fs.constants.F_OK)
@@ -4680,9 +4817,10 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         if (failures.length === 0) {
             this.setupResult = {
                 kind: 'ok',
-                message: totalRemoved === 0
-                    ? 'No tabby-claude-status hooks were configured anywhere.'
-                    : `Removed ${totalRemoved} hook entr${totalRemoved === 1 ? 'y' : 'ies'} from ${successes.join(', ')}`,
+                message:
+                    totalRemoved === 0
+                        ? 'No tabby-claude-status hooks were configured anywhere.'
+                        : `Removed ${totalRemoved} hook entr${totalRemoved === 1 ? 'y' : 'ies'} from ${successes.join(', ')}`,
             }
         } else {
             this.setupResult = {
@@ -4705,9 +4843,10 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
      * place even if empty, since the user may want to add hooks back later.
      */
     private removeHooksFromTarget(target: SetupTarget): number {
-        const settingsPath = target.kind === 'windows'
-            ? path.join(os.homedir(), '.claude', 'settings.json')
-            : target.settingsPath
+        const settingsPath =
+            target.kind === 'windows'
+                ? path.join(os.homedir(), '.claude', 'settings.json')
+                : target.settingsPath
         if (!settingsPath || !fs.existsSync(settingsPath)) return 0
 
         const settings: any = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
@@ -4725,7 +4864,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                 )
                 removed += before - group.hooks.length
             }
-            settings.hooks[event] = matcherGroups.filter(g => Array.isArray(g?.hooks) && g.hooks.length > 0)
+            settings.hooks[event] = matcherGroups.filter(
+                (g) => Array.isArray(g?.hooks) && g.hooks.length > 0,
+            )
             if (settings.hooks[event].length === 0) delete settings.hooks[event]
         }
 
@@ -4736,9 +4877,10 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     }
 
     private writeHooksToTarget(target: SetupTarget): void {
-        const settingsPath = target.kind === 'windows'
-            ? path.join(os.homedir(), '.claude', 'settings.json')
-            : target.settingsPath
+        const settingsPath =
+            target.kind === 'windows'
+                ? path.join(os.homedir(), '.claude', 'settings.json')
+                : target.settingsPath
         if (!settingsPath) {
             throw new Error('Could not resolve settings.json path')
         }

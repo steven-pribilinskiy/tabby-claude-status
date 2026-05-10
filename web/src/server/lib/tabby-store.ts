@@ -64,8 +64,7 @@ export async function readTabbyStore(): Promise<TabbyStoreFile> {
 			sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
 		};
 	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code === "ENOENT")
-			return { ...EMPTY_STORE };
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return { ...EMPTY_STORE };
 		throw err;
 	}
 }
@@ -113,9 +112,7 @@ export async function getSession(id: string): Promise<TabbySession | null> {
 	return store.sessions.find((s) => s.id === id) ?? null;
 }
 
-export async function createSession(
-	session: TabbySession,
-): Promise<TabbySession> {
+export async function createSession(session: TabbySession): Promise<TabbySession> {
 	const store = await readTabbyStore();
 	store.sessions.unshift(session);
 	await writeTabbyStore(store);
@@ -189,10 +186,7 @@ export async function updateTab(
 	return session;
 }
 
-export async function deleteTab(
-	sessionId: string,
-	tabId: string,
-): Promise<TabbySession> {
+export async function deleteTab(sessionId: string, tabId: string): Promise<TabbySession> {
 	const store = await readTabbyStore();
 	const session = store.sessions.find((s) => s.id === sessionId);
 	if (!session) throw new Error(`Session ${sessionId} not found`);

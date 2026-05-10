@@ -1,10 +1,10 @@
 import { Injectable } from '@angular/core'
-import { ConfigService } from 'tabby-core'
+import type { ConfigService } from 'tabby-core'
 import {
-    ClaudeSessionRestoreConfig,
-    ClaudeStatusAudioConfig,
-    ClaudeStatusConfig,
-    ClaudeStatusDisplayConfig,
+    type ClaudeSessionRestoreConfig,
+    type ClaudeStatusAudioConfig,
+    type ClaudeStatusConfig,
+    type ClaudeStatusDisplayConfig,
     DEFAULT_AUDIO_CONFIG,
     DEFAULT_CONFIG,
     DEFAULT_DISPLAY_CONFIG,

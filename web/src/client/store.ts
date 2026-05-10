@@ -13,8 +13,7 @@ const quotaSafeStorage = createJSONStorage(() => ({
 		} catch (err) {
 			const isQuota =
 				err instanceof DOMException &&
-				(err.name === "QuotaExceededError" ||
-					err.name === "NS_ERROR_DOM_QUOTA_REACHED");
+				(err.name === "QuotaExceededError" || err.name === "NS_ERROR_DOM_QUOTA_REACHED");
 			if (!isQuota) throw err;
 			console.warn("[store] localStorage quota exceeded — dropping cache");
 			localStorage.removeItem(name);
