@@ -36,7 +36,7 @@ This requires [`local-proxy`](https://github.com/steven-pribilinskiy/local-proxy
 ## Status
 
 - Plugin: actively maintained, published to npm as `tabby-claude-status@1.x`.
-- Webapp: extracted from a personal monorepo on 2026-05-09; tracks the same release cadence as the plugin since they share an IPC contract.
+- Webapp: tracks the same release cadence as the plugin since they share an IPC contract.
 
 ## License
 

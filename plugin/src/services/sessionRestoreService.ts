@@ -409,7 +409,7 @@ export class SessionRestoreService {
             }
             // Path 3 — legacy records that pre-date the profile capture
             // upgrade have neither profileId nor profileType. Without
-            // them, openTab(undefined, '/home/stevenp/...') falls through
+            // them, openTab(undefined, '/home/<user>/...') falls through
             // to Tabby's default profile, which on Windows is typically
             // PowerShell — and PowerShell can't start in a /home/...
             // cwd, so the openTab call rejects and Resume silently does

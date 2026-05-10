@@ -6,7 +6,7 @@ Companion webapp for the [`tabby-claude-status`](../plugin) Tabby plugin. Two pa
 - **`/tabby/mcp`** — interactive form-driven explorer for every `tabby-mcp` tool (tabs, sessions, profiles, SFTP).
 - **`POST /api/claude/hook`** — sink for the plugin's `hook.js` fire-and-forget. Caches `session_id → ancestors[], ppid` in memory so curl-only Claude Code hooks can still resolve a tab.
 
-Source: most of `src/server/` and `src/client/pages/Tabby*.tsx` was extracted from a personal monorepo (`steven-pribilinskiy/windows-settings`) on 2026-05-09. The plugin and the webapp share an IPC contract (`%TEMP%\tabby-claude-status.json` shape + the hook payload), which is why they live in the same repo.
+The plugin and the webapp share an IPC contract (`%TEMP%\tabby-claude-status.json` file format + the hook payload), which is why they live in the same repo.
 
 ## Run with Docker (recommended)
 

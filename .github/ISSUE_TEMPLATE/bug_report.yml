@@ -1,0 +1,72 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The more reproduction info you can include, the faster the fix.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Which half?
+      options:
+        - Plugin (Tabby tab indicators / TTS / hooks)
+        - Webapp (snapshot/restore, MCP explorer, /api/claude/hook sink)
+        - Both / unsure
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: "Run `npm view tabby-claude-status version` or check Settings → Plugins in Tabby."
+      placeholder: "e.g. 1.2.1"
+
+  - type: input
+    id: tabby-version
+    attributes:
+      label: Tabby version
+      description: From Tabby → About.
+      placeholder: "e.g. 1.0.231"
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
+        - WSL (and which distro)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what actually happened?
+      placeholder: |
+        Steps to reproduce
+        1. ...
+        2. ...
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Useful sources, depending on the issue:
+        - Tabby's developer console (Ctrl+Shift+I in the Tabby window) for plugin runtime errors
+        - `%TEMP%\tabby-claude-status-activity.json` for the rolling event log
+        - Webapp logs from `docker compose logs web`
+        - Claude Code's hook output if a hook misbehaves
+      render: shell
