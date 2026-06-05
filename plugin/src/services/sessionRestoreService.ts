@@ -11,18 +11,29 @@ import { ClaudeStatusConfigService } from './configService'
  * On-disk location for persisted Claude sessions. Kept under Tabby's AppData
  * dir rather than %TEMP% so it survives reboots and Windows tmp cleanup.
  */
-const SESSIONS_FILE = path.join(
-    process.env.APPDATA || os.homedir(),
-    'tabby',
-    'tabby-claude-status-sessions.json',
-)
+const TABBY_DATA_DIR = path.join(process.env.APPDATA || os.homedir(), 'tabby')
+const SESSIONS_FILE = path.join(TABBY_DATA_DIR, 'tabby-claude-status-sessions.json')
+
+/**
+ * Registry of currently-active Tabby windows. Each window writes one file
+ * `<runId>.json` containing its renderer PID; a run is "alive" iff that PID is
+ * still running. This replaces the single currentRunId/previousRunId in the
+ * sessions file, which assumed exactly one Tabby instance — with two windows,
+ * the second's startup overwrote the file's currentRunId and the first
+ * window's still-active sessions then got force-closed into History on the
+ * next restart. Tracking liveness per-window via PIDs lets every live window's
+ * sessions stay active, and only genuinely-exited windows become "previous
+ * run".
+ */
+const RUNS_DIR = path.join(TABBY_DATA_DIR, 'tabby-claude-runs')
 
 interface SessionsFile {
     version: 1
     sessions: ClaudeSessionRecord[]
-    /** Run id of the currently-active Tabby instance (rotated on every start). */
+    /** Run id of the currently-active Tabby instance. Informational only now;
+     *  liveness is tracked via the RUNS_DIR registry, not this field. */
     currentRunId?: string
-    /** Run id of the immediately preceding Tabby instance, captured at startup. */
+    /** @deprecated superseded by the RUNS_DIR registry. Kept for back-compat. */
     previousRunId?: string | null
 }
 
@@ -60,8 +71,14 @@ export class SessionRestoreService {
 
     /** Run id rotated every Tabby start. Records observed in the current run carry this id. */
     private currentRunId: string = SessionRestoreService.makeRunId()
-    /** Run id from the previous Tabby instance — captured on first file read. */
-    private previousRunId: string | null = null
+    /** Run ids of all windows currently alive (including this one). Records
+     *  carrying any of these stay in the "active" pool and are never rolled to
+     *  History — this is what stops a second window from closing another live
+     *  window's sessions. */
+    private liveRunIds: Set<string> = new Set()
+    /** Run ids of windows that have exited since the last launch. Their
+     *  sessions are surfaced under "Previous run". */
+    private previousRunIds: Set<string> = new Set()
     private migrated = false
 
     constructor(
@@ -82,54 +99,51 @@ export class SessionRestoreService {
     /**
      * On the first file touch after this Tabby instance starts:
      *
-     * - Capture `currentRunId` from the file as our `previousRunId`, then
-     *   stamp a fresh `currentRunId` and persist both.
-     * - Tag any legacy `!closed` records (no `runId`) with a synthetic
-     *   previous-run id so they show up under "Previous run" rather than
-     *   getting dumped straight into History.
-     * - Roll any record whose `runId` predates the previous run into History
-     *   (`closed = true`). The "Previous run" bucket only shows the most
-     *   recent prior run, never older ones.
+     * - Register this window in the PID-keyed run registry and classify every
+     *   other registered run as still-alive or exited.
+     * - Tag any legacy `!closed` records (no `runId`) so they show up under
+     *   "Previous run" rather than getting dumped straight into History.
+     * - Roll into History only the open records whose run is neither alive nor
+     *   one of the just-exited "previous run" windows. Records belonging to
+     *   another *live* window are left active — that's the multi-window fix.
      * - Dedupe `sessions` by `sessionId`, keeping the most recent `lastSeen`.
-     *   Guards against any duplicates left over from older versions.
      */
     private migrateIfNeeded(): void {
         if (this.migrated) return
         this.migrated = true
 
-        const file = this.readFile()
-        const priorRunIdFromFile = file.currentRunId ?? null
-        this.previousRunId = priorRunIdFromFile
+        // Register ourselves, then read the registry to classify other windows.
+        this.registerRun()
+        const { live, dead } = this.readRunRegistry()
+        this.liveRunIds = new Set(live)
+        this.liveRunIds.add(this.currentRunId)
+        this.previousRunIds = new Set(dead)
 
-        // Tag legacy open records (no runId, written by a pre-runId version)
-        // with the previous-run id so they surface under "Previous run" rather
-        // than being force-closed into History by the validRunIds sweep below.
-        // This must run whether or not previousRunId already came from the file
-        // — the old `&& !this.previousRunId` guard skipped tagging on any normal
-        // restart (where the file already had a currentRunId), silently dumping
-        // legacy sessions straight into History.
+        const file = this.readFile()
+
+        // Tag legacy open records (no runId, written by a pre-runId version) so
+        // they surface under "Previous run" rather than being force-closed.
         const hasLegacy = file.sessions.some((s) => !s.closed && !s.runId)
         if (hasLegacy) {
-            if (!this.previousRunId) {
-                this.previousRunId = `legacy-${Date.now().toString(36)}`
-            }
+            const legacyRunId = `legacy-${Date.now().toString(36)}`
+            this.previousRunIds.add(legacyRunId)
             for (const s of file.sessions) {
-                if (!s.closed && !s.runId) s.runId = this.previousRunId
+                if (!s.closed && !s.runId) s.runId = legacyRunId
             }
         }
 
-        file.previousRunId = this.previousRunId
         file.currentRunId = this.currentRunId
 
-        const validRunIds = new Set<string>([this.currentRunId])
-        if (this.previousRunId) validRunIds.add(this.previousRunId)
-
+        // Roll into History any open record whose run is neither alive (this or
+        // another open window) nor a just-exited previous run. Records from
+        // live OTHER windows are deliberately preserved here.
         for (const s of file.sessions) {
             if (s.closed) continue
-            if (!s.runId || !validRunIds.has(s.runId)) {
-                s.closed = true
-                s.lastSeen = Date.now()
+            if (s.runId && (this.liveRunIds.has(s.runId) || this.previousRunIds.has(s.runId))) {
+                continue
             }
+            s.closed = true
+            s.lastSeen = Date.now()
         }
 
         const byId = new Map<string, ClaudeSessionRecord>()
@@ -142,6 +156,72 @@ export class SessionRestoreService {
         this.writeFile(file)
     }
 
+    /** Write this window's run-registry file (PID + start time), atomically. */
+    private registerRun(): void {
+        try {
+            fs.mkdirSync(RUNS_DIR, { recursive: true })
+            const final = path.join(RUNS_DIR, `${this.currentRunId}.json`)
+            const tmp = `${final}.tmp-${process.pid}`
+            fs.writeFileSync(tmp, JSON.stringify({ pid: process.pid, startedAt: Date.now() }))
+            fs.renameSync(tmp, final)
+        } catch (err) {
+            console.warn('[claude-status] run registry write failed:', err)
+        }
+    }
+
+    /**
+     * Read the run registry, partitioning other windows' runs into still-alive
+     * (PID running) and exited. Exited runs' files are deleted here so they're
+     * classified "previous run" exactly once — on the next launch they're gone
+     * and their sessions roll to History.
+     */
+    private readRunRegistry(): { live: string[]; dead: string[] } {
+        const live: string[] = []
+        const dead: string[] = []
+        let names: string[]
+        try {
+            names = fs.readdirSync(RUNS_DIR)
+        } catch {
+            return { live, dead }
+        }
+        for (const name of names) {
+            if (!name.endsWith('.json')) continue
+            const runId = name.slice(0, -'.json'.length)
+            if (runId === this.currentRunId) continue // our own run — alive
+            const full = path.join(RUNS_DIR, name)
+            let pid = 0
+            try {
+                const data = JSON.parse(fs.readFileSync(full, 'utf-8'))
+                pid = typeof data?.pid === 'number' ? data.pid : 0
+            } catch {
+                /* unreadable — treat as dead below */
+            }
+            if (pid && this.isPidAlive(pid)) {
+                live.push(runId)
+            } else {
+                dead.push(runId)
+                try {
+                    fs.unlinkSync(full)
+                } catch {
+                    /* already gone */
+                }
+            }
+        }
+        return { live, dead }
+    }
+
+    /** True if a process with this PID is currently running. */
+    private isPidAlive(pid: number): boolean {
+        try {
+            // Signal 0 doesn't send anything — it just probes existence.
+            process.kill(pid, 0)
+            return true
+        } catch (err: any) {
+            // EPERM = the process exists but we lack permission to signal it.
+            return err?.code === 'EPERM'
+        }
+    }
+
     /** Run id of the current Tabby instance. Exposed so the settings tab can
      *  bucket its locally-cached session list (active vs previous run) without
      *  calling back into `list()` — which reads the sessions file from disk —
@@ -150,10 +230,10 @@ export class SessionRestoreService {
         return this.currentRunId
     }
 
-    /** Run id of the immediately-preceding Tabby instance, or null if this is
-     *  the first run / no prior run was recorded. See `getCurrentRunId()`. */
-    getPreviousRunId(): string | null {
-        return this.previousRunId
+    /** Run ids of windows that exited before this launch — their sessions form
+     *  the "Previous run" bucket. */
+    getPreviousRunIds(): Set<string> {
+        return this.previousRunIds
     }
 
     setLiveTitleResolver(resolver: (sessionId: string) => string | undefined): void {
@@ -565,9 +645,8 @@ export class SessionRestoreService {
      * run" bucket. Older runs are rolled into History by `migrateIfNeeded()`.
      */
     previousRunSessions(): ClaudeSessionRecord[] {
-        if (!this.previousRunId) return []
-        const prev = this.previousRunId
-        return this.list().filter((s) => !s.closed && s.runId === prev)
+        if (this.previousRunIds.size === 0) return []
+        return this.list().filter((s) => !s.closed && !!s.runId && this.previousRunIds.has(s.runId))
     }
 
     /**

@@ -3938,9 +3938,9 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     }
 
     get previousRunSessions(): ClaudeSessionRecord[] {
-        const prev = this.sessionRestore.getPreviousRunId()
-        if (!prev) return []
-        return this.sessions.filter((s) => !s.closed && s.runId === prev)
+        const prevIds = this.sessionRestore.getPreviousRunIds()
+        if (prevIds.size === 0) return []
+        return this.sessions.filter((s) => !s.closed && !!s.runId && prevIds.has(s.runId))
     }
 
     get closedSessions(): ClaudeSessionRecord[] {
