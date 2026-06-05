@@ -136,6 +136,12 @@ export class SoundService {
         }
     }
 
+    /** Public stop — lets AudioService halt a playing sound effect when a
+     *  newer status event supersedes it (cross-output cancellation). */
+    stop(): void {
+        this.stopCurrent()
+    }
+
     private stopCurrent(): void {
         if (this.currentAudio) {
             try {

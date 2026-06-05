@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core'
 import Anthropic from '@anthropic-ai/sdk'
 import type { ClaudeStatusDynamicConfig, ClaudeStatusName } from '../interfaces/types'
-import type { ClaudeCredentialsService } from './claudeCredentialsService'
+import { ClaudeCredentialsService } from './claudeCredentialsService'
 import type { TranscriptTail } from './transcriptReaderService'
 
 export interface DynamicPhraseContext {
@@ -147,7 +147,12 @@ export class ClaudeApiService {
 
         const userPrompt = this.fillTemplate(promptTemplate, ctx)
         const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), cfg.timeoutMs)
+        // Guard against an undefined/0 timeout (partial config, or a cleared
+        // number input): setTimeout(…, 0) would abort the request before it
+        // even starts, so dynamic mode would always return null. Clamp to a
+        // sane floor and default.
+        const timeoutMs = cfg.timeoutMs && cfg.timeoutMs > 0 ? cfg.timeoutMs : 2000
+        const timer = setTimeout(() => controller.abort(), timeoutMs)
 
         try {
             const clientOptions: any = {
@@ -243,7 +248,10 @@ export class ClaudeApiService {
             .replace(/[.!?,;:]+$/g, '')
             .trim()
         if (!out) return null
-        if (out.length > 60) out = out.slice(0, 60).trim()
+        // Slice by code points, not UTF-16 units, so a 60-char cut can't split
+        // an emoji/surrogate pair and hand a lone surrogate to the TTS engine.
+        const cp = Array.from(out)
+        if (cp.length > 60) out = cp.slice(0, 60).join('').trim()
         return out
     }
 }

@@ -109,7 +109,11 @@ export class StatusParserService {
      * Check if a string contains any Claude status escape sequences
      */
     hasStatusSequence(output: string): boolean {
-        return this.ESCAPE_SEQUENCE_REGEX.test(output)
+        // Use a fresh, non-global regex. Calling `.test()` on the shared
+        // `/g` ESCAPE_SEQUENCE_REGEX advances its `lastIndex`, so consecutive
+        // calls on similar input alternate true/false (and can corrupt the
+        // index for the `parse()`/`replace()` callers that share it).
+        return new RegExp(this.ESCAPE_SEQUENCE_REGEX.source).test(output)
     }
 
     /**

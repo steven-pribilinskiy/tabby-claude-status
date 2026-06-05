@@ -1,11 +1,11 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { Injectable, Optional } from '@angular/core'
-import type { NotificationsService, ProfilesService } from 'tabby-core'
-import type { TerminalService } from 'tabby-local'
+import { Inject, Injectable, Optional } from '@angular/core'
+import { NotificationsService, ProfilesService } from 'tabby-core'
+import { TerminalService } from 'tabby-local'
 import type { ClaudeSessionRecord } from '../interfaces/types'
-import type { ClaudeStatusConfigService } from './configService'
+import { ClaudeStatusConfigService } from './configService'
 
 /**
  * On-disk location for persisted Claude sessions. Kept under Tabby's AppData
@@ -66,9 +66,11 @@ export class SessionRestoreService {
 
     constructor(
         private configService: ClaudeStatusConfigService,
-        @Optional() private terminalService: TerminalService | null,
-        @Optional() private notifications: NotificationsService | null,
-        @Optional() private profilesService: ProfilesService | null,
+        @Optional() @Inject(TerminalService) private terminalService: TerminalService | null,
+        @Optional()
+        @Inject(NotificationsService)
+        private notifications: NotificationsService | null,
+        @Optional() @Inject(ProfilesService) private profilesService: ProfilesService | null,
     ) {
         this.migrateIfNeeded()
     }
@@ -99,9 +101,18 @@ export class SessionRestoreService {
         const priorRunIdFromFile = file.currentRunId ?? null
         this.previousRunId = priorRunIdFromFile
 
+        // Tag legacy open records (no runId, written by a pre-runId version)
+        // with the previous-run id so they surface under "Previous run" rather
+        // than being force-closed into History by the validRunIds sweep below.
+        // This must run whether or not previousRunId already came from the file
+        // — the old `&& !this.previousRunId` guard skipped tagging on any normal
+        // restart (where the file already had a currentRunId), silently dumping
+        // legacy sessions straight into History.
         const hasLegacy = file.sessions.some((s) => !s.closed && !s.runId)
-        if (hasLegacy && !this.previousRunId) {
-            this.previousRunId = `legacy-${Date.now().toString(36)}`
+        if (hasLegacy) {
+            if (!this.previousRunId) {
+                this.previousRunId = `legacy-${Date.now().toString(36)}`
+            }
             for (const s of file.sessions) {
                 if (!s.closed && !s.runId) s.runId = this.previousRunId
             }
@@ -129,6 +140,20 @@ export class SessionRestoreService {
         file.sessions = [...byId.values()]
 
         this.writeFile(file)
+    }
+
+    /** Run id of the current Tabby instance. Exposed so the settings tab can
+     *  bucket its locally-cached session list (active vs previous run) without
+     *  calling back into `list()` — which reads the sessions file from disk —
+     *  on every Angular change-detection cycle. */
+    getCurrentRunId(): string {
+        return this.currentRunId
+    }
+
+    /** Run id of the immediately-preceding Tabby instance, or null if this is
+     *  the first run / no prior run was recorded. See `getCurrentRunId()`. */
+    getPreviousRunId(): string | null {
+        return this.previousRunId
     }
 
     setLiveTitleResolver(resolver: (sessionId: string) => string | undefined): void {
@@ -252,8 +277,11 @@ export class SessionRestoreService {
     list(): ClaudeSessionRecord[] {
         const cfg = this.configService.getSessionRestoreConfig()
         const file = this.readFile()
-        this.pruneInPlace(file, cfg.retentionDays)
-        let dirty = false
+        // Persist the prune too — otherwise a list() that only removed expired
+        // records (no title/profile change) returned the pruned array but left
+        // the stale records on disk, so they reappeared on the next read and
+        // got re-pruned every call.
+        let dirty = this.pruneInPlace(file, cfg.retentionDays)
         for (const s of file.sessions) {
             if (s.closed) continue
             const live = this.getLiveTitle(s.sessionId)
@@ -324,8 +352,16 @@ export class SessionRestoreService {
 
         const profile = await this.resolveProfile(session)
 
+        // Pass cwd to openTab ONLY when it's a path Tabby's host (Windows)
+        // can stat — otherwise Tabby's tabby-local logs "Ignoring
+        // non-existent CWD: …" and silently opens the tab at the
+        // profile's default dir. For WSL/SSH/non-Windows profiles the
+        // cwd lives on the *guest* filesystem; rely entirely on the
+        // explicit `cd "<cwd>"` we send below.
+        const openCwd = this.cwdSafeForOpenTab(profile, session.cwd)
+
         try {
-            const tab = await this.terminalService.openTab(profile, session.cwd)
+            const tab = await this.terminalService.openTab(profile, openCwd)
             if (!tab) {
                 const msg = profile
                     ? `Tabby returned no tab for profile ${profile.name || profile.id}. Check the profile's command and cwd.`
@@ -341,7 +377,19 @@ export class SessionRestoreService {
             // is sent into the still-initialising shell and dropped, and
             // the user's tab ends up at the profile's default cwd
             // instead of the session cwd.
+            // The tab may be closed by the user during either delay below.
+            // sendInput on a destroyed tab can silently go nowhere (or throw);
+            // skip it if the tab's session is gone so we don't fire a resume
+            // command into a dead pty.
+            const tabAlive = () => {
+                const t = tab as any
+                if (t?.destroyed === true) return false
+                // A live local terminal tab has a `session`/`frontend`; once
+                // closed Tabby tears these down. Treat absence as "not alive".
+                return !!(t?.session || t?.frontend)
+            }
             setTimeout(() => {
+                if (!tabAlive()) return
                 try {
                     tab.sendInput(cdCmd)
                 } catch (err) {
@@ -349,6 +397,7 @@ export class SessionRestoreService {
                     return
                 }
                 setTimeout(() => {
+                    if (!tabAlive()) return
                     try {
                         tab.sendInput(resumeCmd)
                     } catch (err) {
@@ -366,13 +415,47 @@ export class SessionRestoreService {
     }
 
     /**
+     * Decide whether `cwd` can be passed to `terminalService.openTab(profile, cwd)`.
+     * Tabby's tabby-local does `fs.lstatSync(cwd)` on the *host* (always
+     * Windows on this build) and logs "Ignoring non-existent CWD: …"
+     * when the path is missing. WSL/SSH cwds (`/home/...`, `~/...`)
+     * always fail that check even though they're valid inside the
+     * guest. Drop the cwd in those cases; the `cd "<cwd>"` we send via
+     * sendInput already places the shell in the right directory once
+     * the pty is alive.
+     */
+    private cwdSafeForOpenTab(profile: any, cwd: string): string | undefined {
+        if (!cwd) return undefined
+        // Non-local profile types (ssh, telnet, serial, …) — cwd lives
+        // remotely, not on the host filesystem.
+        const profType = profile?.type
+        if (profType && profType !== 'local') return undefined
+        // WSL profiles run wsl.exe — their cwd is inside the WSL distro,
+        // not on Windows. We detect WSL via the profile's command.
+        const cmd = String(profile?.options?.command ?? '').toLowerCase()
+        if (cmd.includes('wsl.exe') || cmd.endsWith('\\wsl')) return undefined
+        // Heuristic: Unix-style absolute path on a Windows host means
+        // the session was inside WSL or SSH — host can't stat it.
+        if (process.platform === 'win32' && (cwd.startsWith('/') || cwd.startsWith('~'))) {
+            return undefined
+        }
+        return cwd
+    }
+
+    /**
      * Quote a path for `cd` in the target shell. Both bash and PowerShell
      * accept double quotes around a path; the only character we have to escape
      * is the double-quote itself (rare in cwds, but cheap to handle).
      */
     private shellQuote(p: string): string {
         if (!p) return '""'
-        return `"${p.replace(/"/g, '\\"')}"`
+        // Strip a trailing path separator before quoting. `cd "C:\foo\"` (or
+        // the bash equivalent) mis-parses because the trailing `\` escapes the
+        // closing quote, breaking the command and landing the resume in the
+        // wrong directory. `cd "C:\foo"` is equivalent. Keep the original if
+        // stripping would empty the string (e.g. a bare "/").
+        const trimmed = p.replace(/[\\/]+$/, '') || p
+        return `"${trimmed.replace(/"/g, '\\"')}"`
     }
 
     /**
@@ -534,15 +617,38 @@ export class SessionRestoreService {
     private writeFile(file: SessionsFile): void {
         try {
             fs.mkdirSync(path.dirname(SESSIONS_FILE), { recursive: true })
-            fs.writeFileSync(SESSIONS_FILE, JSON.stringify(file, null, 2), 'utf-8')
+            // Atomic write: serialise to a temp file then rename over the
+            // target. A reader (another window, or the settings tab's 5s
+            // refresh) therefore always sees either the complete old file or
+            // the complete new one — never a half-written, unparseable file
+            // that JSON.parse would reject and treat as an empty session list.
+            // The `.tmp-<pid>` suffix keeps concurrent writers from colliding
+            // on the same temp path.
+            const tmp = `${SESSIONS_FILE}.tmp-${process.pid}`
+            fs.writeFileSync(tmp, JSON.stringify(file, null, 2), 'utf-8')
+            fs.renameSync(tmp, SESSIONS_FILE)
         } catch (err) {
             console.warn('[claude-status] sessions file write failed:', err)
         }
     }
 
-    private pruneInPlace(file: SessionsFile, retentionDays: number): void {
-        if (!retentionDays || retentionDays <= 0) return
+    /** Drop records older than the retention window. Returns true if anything
+     *  was removed so callers can persist the change. */
+    private pruneInPlace(file: SessionsFile, retentionDays: number): boolean {
+        if (!retentionDays || retentionDays <= 0) return false
         const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
-        file.sessions = file.sessions.filter((s) => s.lastSeen >= cutoff)
+        const before = file.sessions.length
+        file.sessions = file.sessions.filter((s) => {
+            // Treat a missing/NaN lastSeen as "recently seen" rather than
+            // pruning it: `undefined >= cutoff` is false, which would silently
+            // delete a record (possibly an active session) whose lastSeen got
+            // corrupted or was never set. Fall back to firstSeen, then now.
+            const seen =
+                typeof s.lastSeen === 'number' && Number.isFinite(s.lastSeen)
+                    ? s.lastSeen
+                    : (s.firstSeen ?? Date.now())
+            return seen >= cutoff
+        })
+        return file.sessions.length !== before
     }
 }

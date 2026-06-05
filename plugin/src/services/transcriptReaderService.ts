@@ -47,14 +47,19 @@ export class TranscriptReaderService {
                 const fd = fs.openSync(transcriptPath, 'r')
                 try {
                     const chunk = Buffer.alloc(maxBytes)
-                    fs.readSync(fd, chunk, 0, maxBytes, stat.size - maxBytes)
-                    buffer = chunk.toString('utf-8')
+                    const bytesRead = fs.readSync(fd, chunk, 0, maxBytes, stat.size - maxBytes)
+                    const slice = chunk.subarray(0, bytesRead)
+                    // Find the first newline at the BYTE level and decode only
+                    // from after it. This drops the (partial) first line and,
+                    // crucially, avoids decoding a window that starts mid-way
+                    // through a multi-byte UTF-8 char — which `toString('utf-8')`
+                    // would otherwise turn into a leading replacement char.
+                    const nlByte = slice.indexOf(0x0a)
+                    const from = nlByte >= 0 ? nlByte + 1 : 0
+                    buffer = slice.subarray(from).toString('utf-8')
                 } finally {
                     fs.closeSync(fd)
                 }
-                // Drop the first (potentially partial) line.
-                const nl = buffer.indexOf('\n')
-                if (nl >= 0) buffer = buffer.slice(nl + 1)
             }
         } catch {
             return empty
@@ -122,11 +127,29 @@ export class TranscriptReaderService {
         const parts: string[] = []
         for (const block of content) {
             if (!block || typeof block !== 'object') continue
-            const b = block as { type?: string; text?: string }
+            const b = block as { type?: string; text?: string; content?: unknown }
             if (b.type === 'text' && typeof b.text === 'string') {
                 parts.push(b.text)
-            } else if (!skipToolResults && b.type === 'tool_result' && typeof b.text === 'string') {
-                parts.push(b.text)
+            } else if (!skipToolResults && b.type === 'tool_result') {
+                // tool_result blocks carry their payload under `content` (a
+                // string, or an array of {type:'text', text} blocks) — not a
+                // top-level `text` field. Reading `b.text` here extracted
+                // nothing.
+                const c = b.content
+                if (typeof c === 'string') {
+                    parts.push(c)
+                } else if (Array.isArray(c)) {
+                    for (const inner of c) {
+                        if (
+                            inner &&
+                            typeof inner === 'object' &&
+                            (inner as any).type === 'text' &&
+                            typeof (inner as any).text === 'string'
+                        ) {
+                            parts.push((inner as any).text)
+                        }
+                    }
+                }
             }
         }
         return parts.join(' ').trim()

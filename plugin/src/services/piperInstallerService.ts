@@ -467,19 +467,62 @@ export class PiperInstallerService {
         onProgress: (bytesReceived: number, bytesTotal: number) => void,
     ): Promise<void> {
         return new Promise((resolve, reject) => {
+            // Download to a temp `.part` file and only rename it over the final
+            // path once the transfer completes AND matches the advertised size.
+            // Otherwise an interrupted download leaves a truncated .onnx/.json
+            // at destPath, where isInstalled()/downloadVoice() gate purely on
+            // existsSync() and treat it as a complete, valid voice that's never
+            // repaired — Piper then fails to load it with no way to fix via UI.
+            const tmpPath = `${destPath}.part-${process.pid}`
+            const cleanupTmp = () => {
+                try {
+                    fs.unlinkSync(tmpPath)
+                } catch {
+                    /* nothing to clean up */
+                }
+            }
             this.httpGet(url, (res) => {
                 const total = Number(res.headers['content-length'] || 0)
                 let received = 0
-                const file = fs.createWriteStream(destPath)
+                const file = fs.createWriteStream(tmpPath)
+                const fail = (err: Error) => {
+                    try {
+                        file.destroy()
+                    } catch {
+                        /* noop */
+                    }
+                    cleanupTmp()
+                    reject(err)
+                }
                 res.on('data', (c) => {
                     received += c.length
                     onProgress(received, total)
                 })
+                res.on('error', fail)
+                file.on('error', fail)
                 res.pipe(file)
-                file.on('finish', () => file.close((err) => (err ? reject(err) : resolve())))
-                file.on('error', reject)
-                res.on('error', reject)
-            }).catch(reject)
+                file.on('finish', () =>
+                    file.close((err) => {
+                        if (err) return fail(err)
+                        if (total > 0 && received !== total) {
+                            return fail(
+                                new Error(
+                                    `Truncated download (${received}/${total} bytes) for ${url}`,
+                                ),
+                            )
+                        }
+                        try {
+                            fs.renameSync(tmpPath, destPath)
+                            resolve()
+                        } catch (renameErr) {
+                            fail(renameErr as Error)
+                        }
+                    }),
+                )
+            }).catch((err) => {
+                cleanupTmp()
+                reject(err)
+            })
         })
     }
 

@@ -69,9 +69,12 @@ export class WebSpeechBackend implements TtsBackend {
         window.speechSynthesis.cancel()
 
         const utterance = new SpeechSynthesisUtterance(params.text)
-        utterance.volume = params.volume
-        utterance.rate = params.rate
-        utterance.pitch = params.pitch
+        // Clamp to the Web Speech API's valid ranges (volume 0..1, rate
+        // 0.1..10, pitch 0..2). Out-of-range assignments are rejected/ignored
+        // by some engines, silently muting or breaking the utterance.
+        utterance.volume = Math.max(0, Math.min(1, params.volume))
+        utterance.rate = Math.max(0.1, Math.min(10, params.rate))
+        utterance.pitch = Math.max(0, Math.min(2, params.pitch))
 
         if (params.voiceId) {
             const voice = this.getNativeVoices().find((v) => v.name === params.voiceId)

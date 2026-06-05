@@ -85,7 +85,9 @@ export class EdgeTtsBackend implements TtsBackend {
 
         this.cancel()
         const audio = new Audio(url)
-        audio.volume = params.volume
+        // HTMLMediaElement.volume throws IndexSizeError outside [0,1] — clamp
+        // rather than trust the caller's configured value.
+        audio.volume = Math.max(0, Math.min(1, params.volume))
         this.currentAudio = audio
         audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true })
         audio.addEventListener(

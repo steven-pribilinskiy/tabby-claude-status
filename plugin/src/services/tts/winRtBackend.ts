@@ -15,7 +15,14 @@ export class WinRtBackend implements TtsBackend {
     readonly label = 'Windows OneCore (offline)'
 
     private currentProcess: ReturnType<typeof spawn> | null = null
+    private currentWatchdog: ReturnType<typeof setTimeout> | null = null
     private voicesCache: TtsVoice[] | null = null
+
+    /** Hard upper bound on how long a single utterance's PowerShell host may
+     *  live. The script self-terminates after a computed Start-Sleep, but a
+     *  bad stream size or a hung WinRT call could otherwise leave the host
+     *  alive indefinitely — this watchdog guarantees it's reaped. */
+    private static readonly MAX_UTTERANCE_MS = 30_000
 
     async isAvailable(): Promise<boolean> {
         if (process.platform !== 'win32') return false
@@ -103,25 +110,42 @@ export class WinRtBackend implements TtsBackend {
             $player.Source = [Windows.Media.Core.MediaSource]::CreateFromStream($stream, $stream.ContentType)
             $player.Play()
 
-            # Keep the process alive long enough for playback to finish.
-            $dur = $stream.Size / 32000.0 + 1.5
+            # Keep the process alive long enough for playback to finish. Clamp
+            # so a bogus stream size can't sleep for minutes; the JS watchdog is
+            # the hard backstop.
+            $dur = [Math]::Min([Math]::Max($stream.Size / 32000.0 + 1.5, 0.5), 30)
             Start-Sleep -Seconds $dur
         `
 
         this.cancel()
-        this.currentProcess = spawn(
-            'powershell.exe',
-            ['-NoProfile', '-NonInteractive', '-Command', ps],
-            {
-                windowsHide: true,
-            },
-        )
-        this.currentProcess.on('error', (err) => {
+        const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+            windowsHide: true,
+        })
+        this.currentProcess = proc
+        proc.on('error', (err) => {
             console.error('[claude-status] WinRT speak spawn error:', err)
         })
+        // Clear our handle once the host exits on its own so a later cancel()
+        // doesn't kill an unrelated recycled PID and we don't hold a dead ref.
+        proc.on('exit', () => {
+            if (this.currentProcess === proc) {
+                this.currentProcess = null
+                if (this.currentWatchdog) {
+                    clearTimeout(this.currentWatchdog)
+                    this.currentWatchdog = null
+                }
+            }
+        })
+        this.currentWatchdog = setTimeout(() => {
+            if (this.currentProcess === proc) this.cancel()
+        }, WinRtBackend.MAX_UTTERANCE_MS)
     }
 
     cancel(): void {
+        if (this.currentWatchdog) {
+            clearTimeout(this.currentWatchdog)
+            this.currentWatchdog = null
+        }
         if (this.currentProcess) {
             try {
                 this.currentProcess.kill()

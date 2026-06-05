@@ -63,7 +63,8 @@
 			"linter": {
 				"rules": {
 					"style": {
-						"noNonNullAssertion": "off"
+						"noNonNullAssertion": "off",
+						"useImportType": "off"
 					},
 					"correctness": {
 						"noUnusedPrivateClassMembers": "off"

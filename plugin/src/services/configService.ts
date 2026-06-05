@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core'
-import type { ConfigService } from 'tabby-core'
+import { ConfigService } from 'tabby-core'
 import {
     type ClaudeSessionRestoreConfig,
     type ClaudeStatusAudioConfig,
@@ -89,6 +89,30 @@ export class ClaudeStatusConfigService {
             voicesByBackend: {
                 ...(DEFAULT_AUDIO_CONFIG.voicesByBackend || {}),
                 ...(stored.voicesByBackend || {}),
+            },
+            // Deep-merge `dynamic` so a partial stored object (e.g. one written
+            // by an older version, or hand-edited, that has `enabled` but no
+            // `perStatus`) can't shallow-override the defaults and leave
+            // `dynamic.perStatus` / `dynamic.timeoutMs` undefined — the runtime
+            // audio path reads those without the backfill the settings tab does.
+            dynamic: this.mergeDynamic(stored.dynamic),
+        }
+    }
+
+    /** Backfill every field of the `dynamic` config from defaults, including
+     *  each `perStatus` entry, so the runtime never dereferences an undefined
+     *  nested field regardless of how partial the stored object is. */
+    private mergeDynamic(
+        stored: Partial<ClaudeStatusAudioConfig['dynamic']> | undefined,
+    ): ClaudeStatusAudioConfig['dynamic'] {
+        const def = DEFAULT_AUDIO_CONFIG.dynamic
+        const s = stored || {}
+        return {
+            ...def,
+            ...s,
+            perStatus: {
+                done: { ...def.perStatus.done, ...(s.perStatus?.done || {}) },
+                question: { ...def.perStatus.question, ...(s.perStatus?.question || {}) },
             },
         }
     }

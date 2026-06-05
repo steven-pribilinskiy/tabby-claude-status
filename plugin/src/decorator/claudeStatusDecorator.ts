@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { Injectable } from '@angular/core'
-import type { AppService } from 'tabby-core'
+import { AppService } from 'tabby-core'
 import { type BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import {
     type ClaudeStatusDisplayConfig,
@@ -10,11 +10,11 @@ import {
     type ClaudeStatusName,
     HOOK_EVENT_STATUS_MAP,
 } from '../interfaces/types'
-import type { AudioService } from '../services/audioService'
-import type { ClaudeStatusConfigService } from '../services/configService'
-import type { SessionRestoreService } from '../services/sessionRestoreService'
-import type { StatusActivityLogService } from '../services/statusActivityLogService'
-import type { StatusParserService } from '../services/statusParserService'
+import { AudioService } from '../services/audioService'
+import { ClaudeStatusConfigService } from '../services/configService'
+import { SessionRestoreService } from '../services/sessionRestoreService'
+import { StatusActivityLogService } from '../services/statusActivityLogService'
+import { StatusParserService } from '../services/statusParserService'
 
 const STATUS_FILE = path.join(os.tmpdir(), 'tabby-claude-status.json')
 
@@ -41,7 +41,19 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
     private sessionTerminals: Map<string, BaseTerminalTabComponent> = new Map()
     private fileWatcher: fs.FSWatcher | null = null
     private pollInterval: ReturnType<typeof setInterval> | null = null
-    private lastFileTs = 0
+    /**
+     * Recently-processed event signatures, used to dedupe the duplicate
+     * change events `fs.watch` fires for a single write (common on Windows).
+     * Keyed on the full event identity (ts + event + session + tool) rather
+     * than a single monotonic `lastFileTs` threshold — the old threshold
+     * dropped genuinely-distinct events that happened to share a millisecond,
+     * and permanently blocked ALL events after any backward wall-clock change
+     * (NTP correction, VM resume) since every new ts then compared `<=` the
+     * stuck high-water mark. `recentEventOrder` bounds the set to the last N.
+     */
+    private recentEventSigs: Set<string> = new Set()
+    private recentEventOrder: string[] = []
+    private static readonly MAX_RECENT_SIGS = 50
     /**
      * Flipped to true when the renderer fires `beforeunload` — i.e. the
      * user is closing the Tabby window. Tabby then mass-detaches every
@@ -248,10 +260,23 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             const data = JSON.parse(raw)
             if (!data.ts || !data.event) return
 
-            if (data.ts <= this.lastFileTs) return
-            this.lastFileTs = data.ts
-
+            // Staleness gate first: ignore events older than 10s (e.g. a stale
+            // file left over from a previous run, read on startup). Uses a time
+            // delta, not a stored high-water mark, so a backward clock change
+            // can't wedge it permanently.
             if (Date.now() - data.ts > 10000) return
+
+            // Dedupe fs.watch's duplicate fires for one write. A distinct event
+            // sharing a millisecond with a prior one has a different signature
+            // and is still processed.
+            const sig = `${data.ts}|${data.event}|${data.session || ''}|${data.tool || ''}`
+            if (this.recentEventSigs.has(sig)) return
+            this.recentEventSigs.add(sig)
+            this.recentEventOrder.push(sig)
+            if (this.recentEventOrder.length > ClaudeStatusDecorator.MAX_RECENT_SIGS) {
+                const evicted = this.recentEventOrder.shift()
+                if (evicted) this.recentEventSigs.delete(evicted)
+            }
 
             // Map event name → status
             const mapper = HOOK_EVENT_STATUS_MAP[data.event]

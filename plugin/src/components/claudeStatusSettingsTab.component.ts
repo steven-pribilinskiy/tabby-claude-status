@@ -1,5 +1,5 @@
-import { Component, type DoCheck, type OnDestroy, type OnInit } from '@angular/core'
-import type { ConfigService } from 'tabby-core'
+import { Component, type DoCheck, ElementRef, type OnDestroy, type OnInit } from '@angular/core'
+import { ConfigService } from 'tabby-core'
 import {
     type AudioMode,
     type ClaudeSessionRecord,
@@ -10,23 +10,23 @@ import {
     DEFAULT_SESSION_RESTORE_CONFIG,
     type TtsBackendId,
 } from '../interfaces/types'
-import type { AudioService } from '../services/audioService'
-import type { ClaudeApiService, ClaudeModelOption } from '../services/claudeApiService'
-import type {
+import { AudioService } from '../services/audioService'
+import { ClaudeApiService, type ClaudeModelOption } from '../services/claudeApiService'
+import {
     ClaudeCredentialsService,
-    CredentialsStatus,
+    type CredentialsStatus,
 } from '../services/claudeCredentialsService'
-import type {
+import {
     PiperInstallerService,
-    PiperVoiceCatalogEntry,
+    type PiperVoiceCatalogEntry,
 } from '../services/piperInstallerService'
-import type { SessionRestoreService } from '../services/sessionRestoreService'
-import type { OnlineSoundEntry, SoundEntry, SoundService } from '../services/soundService'
-import type {
-    ActivityLogEntry,
+import { SessionRestoreService } from '../services/sessionRestoreService'
+import { type OnlineSoundEntry, type SoundEntry, SoundService } from '../services/soundService'
+import {
+    type ActivityLogEntry,
     StatusActivityLogService,
 } from '../services/statusActivityLogService'
-import type { TranscriptReaderService } from '../services/transcriptReaderService'
+import { TranscriptReaderService } from '../services/transcriptReaderService'
 import type { TtsVoice } from '../services/tts/tts.interface'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -301,6 +301,124 @@ interface BackendOption {
            Only the badge tweak below stays — everything else comes from
            Bootstrap. */
         .settings-tabs { margin-bottom: 1rem; }
+        .settings-tabs .nav-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        /* Hide the default Bootstrap ::after caret on split-dropdown
+           toggles — we render our own bigger ▾ glyph as <span class="caret">
+           and don't want both stacked. */
+        .dropdown-toggle-split::after { display: none !important; }
+
+        /* Per-tab content narrowing. General / Audio / Sessions /
+           Diagnostics tabs read better at form-width; Hooks pins this
+           on its top section while letting the activity table escape. */
+        .tab-pane-narrow { max-width: 600px; }
+
+        /* Sessions-tab accordions (Previous run, History). The old
+           btn-link headers blended into the page; this gives each
+           section a defined card with a clickable header bar, rotating
+           chevron, and a count badge that's easy to scan. */
+        .claude-accordion {
+            margin-top: 0.75rem;
+            max-width: 900px;
+            border: 1px solid var(--bs-border-color, rgba(128, 128, 128, 0.25));
+            border-radius: 0.375rem;
+            background: rgba(128, 128, 128, 0.04);
+            overflow: hidden;
+        }
+        .claude-accordion-header {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            width: 100%;
+            padding: 0.55rem 0.85rem;
+            background: transparent;
+            border: 0;
+            color: inherit;
+            font-weight: 600;
+            font-size: 0.95rem;
+            text-align: left;
+            cursor: pointer;
+            transition: background 0.12s ease;
+        }
+        .claude-accordion-header:hover {
+            background: rgba(128, 128, 128, 0.10);
+        }
+        .claude-accordion-header:focus-visible {
+            outline: 2px solid var(--bs-primary, #0d6efd);
+            outline-offset: -2px;
+        }
+        .claude-accordion-header .accordion-chevron {
+            transition: transform 0.18s ease;
+            width: 0.85rem;
+            opacity: 0.7;
+        }
+        .claude-accordion-header.is-open .accordion-chevron {
+            transform: rotate(90deg);
+        }
+        .claude-accordion-header .accordion-title {
+            flex: 1;
+            min-width: 0;
+        }
+        .claude-accordion-header .accordion-count {
+            font-size: 0.78rem;
+            font-weight: 500;
+            padding: 0.1rem 0.5rem;
+            border-radius: 999px;
+            background: rgba(128, 128, 128, 0.18);
+            color: inherit;
+            white-space: nowrap;
+        }
+        .claude-accordion-header .accordion-count.is-match {
+            background: var(--bs-primary, #0d6efd);
+            color: #fff;
+        }
+        .claude-accordion-body {
+            padding: 0.75rem 0.85rem 1rem;
+            border-top: 1px solid var(--bs-border-color, rgba(128, 128, 128, 0.18));
+            background: var(--bs-body-bg, transparent);
+        }
+
+        /* Recent-activity virtualization. Real windowing — only the slice
+           of rows the user can see (plus a small overscan) is in the DOM.
+           Fixed-height tbody rows let us compute startIndex/endIndex from
+           scrollTop without measuring each row. Top/bottom spacer rows
+           reserve the scrollbar travel for the rows we don't render. */
+        .activity-scroll-viewport {
+            max-height: 60vh;
+            overflow-y: auto;
+            max-width: 1100px;
+            border: 1px solid var(--bs-border-color, rgba(128, 128, 128, 0.25));
+            border-radius: 0.25rem;
+        }
+        .activity-scroll-viewport > .table { margin-bottom: 0; table-layout: fixed; }
+        .activity-scroll-viewport thead th {
+            position: sticky;
+            top: 0;
+            background: var(--bs-body-bg, inherit);
+            z-index: 1;
+        }
+        .activity-scroll-viewport tbody tr.activity-row {
+            height: 44px;
+        }
+        .activity-scroll-viewport tbody tr.activity-row td {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            vertical-align: middle;
+        }
+        .activity-scroll-viewport tbody tr.activity-row td.detail-cell {
+            white-space: normal;
+            display: table-cell;
+        }
+        .activity-scroll-viewport tbody tr.activity-row td.detail-cell .detail-inner {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
         .settings-tabs .tab-badge {
             background: rgba(128, 128, 128, 0.2);
             color: inherit;
@@ -450,7 +568,7 @@ interface BackendOption {
             </ul>
 
             <!-- ============== GENERAL TAB ============== -->
-            <div *ngIf="activeTab === 'general'">
+            <div *ngIf="activeTab === 'general'" class="tab-pane-narrow">
 
                 <!-- Enable plugin -->
                 <div class="toggle-row">
@@ -608,7 +726,7 @@ interface BackendOption {
             </div>
 
             <!-- ============== AUDIO / TTS TAB ============== -->
-            <div *ngIf="activeTab === 'audio'">
+            <div *ngIf="activeTab === 'audio'" class="tab-pane-narrow">
 
             <!-- Audio / TTS -->
             <h5>Audio</h5>
@@ -1477,7 +1595,7 @@ interface BackendOption {
             </div><!-- /audio tab -->
 
             <!-- ============== SESSIONS TAB ============== -->
-            <div *ngIf="activeTab === 'sessions'">
+            <div *ngIf="activeTab === 'sessions'" class="tab-pane-narrow">
 
             <!-- Session restore -->
             <h5>Session restore</h5>
@@ -1633,7 +1751,7 @@ interface BackendOption {
                         </tr>
                     </thead>
                     <tbody>
-                        <tr *ngFor="let s of filteredActiveSessions">
+                        <tr *ngFor="let s of filteredActiveSessions; trackBy: trackBySessionId">
                             <td>
                                 <div class="copyable-row">
                                     <code class="small">{{s.cwd}}</code>
@@ -1688,15 +1806,22 @@ interface BackendOption {
                     No active sessions match "{{sessionFilter}}".
                 </div>
 
-                <div class="ms-3 mt-3" style="max-width: 900px">
-                    <button class="btn btn-sm btn-link ps-0 text-decoration-none"
+                <div class="ms-3 claude-accordion">
+                    <button type="button"
+                            class="claude-accordion-header"
+                            [class.is-open]="previousRunExpanded"
+                            [attr.aria-expanded]="previousRunExpanded"
                             (click)="previousRunExpanded = !previousRunExpanded">
-                        <i class="fas" [class.fa-chevron-down]="previousRunExpanded"
-                                        [class.fa-chevron-right]="!previousRunExpanded"></i>
-                        Previous run ({{previousRunSessions.length}}<span *ngIf="sessionFilter">, {{filteredPreviousRunSessions.length}} match</span>)
+                        <i class="fas fa-chevron-right accordion-chevron"></i>
+                        <span class="accordion-title">Previous run</span>
+                        <span class="accordion-count"
+                              [class.is-match]="sessionFilter && filteredPreviousRunSessions.length > 0">
+                            <ng-container *ngIf="!sessionFilter">{{previousRunSessions.length}}</ng-container>
+                            <ng-container *ngIf="sessionFilter">{{filteredPreviousRunSessions.length}} / {{previousRunSessions.length}}</ng-container>
+                        </span>
                     </button>
 
-                    <div *ngIf="previousRunExpanded" class="mt-2">
+                    <div *ngIf="previousRunExpanded" class="claude-accordion-body">
                         <div class="text-muted small mb-2">
                             Sessions Tabby remembers from the previous run. Click <strong>Fork</strong>
                             to pick up where you left off; otherwise they roll into History next
@@ -1711,7 +1836,7 @@ interface BackendOption {
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr *ngFor="let s of filteredPreviousRunSessions">
+                                <tr *ngFor="let s of filteredPreviousRunSessions; trackBy: trackBySessionId">
                                     <td>
                                         <div class="copyable-row">
                                             <code class="small">{{s.cwd}}</code>
@@ -1804,15 +1929,22 @@ interface BackendOption {
                     </div>
                 </div>
 
-                <div class="ms-3 mt-3" style="max-width: 900px">
-                    <button class="btn btn-sm btn-link ps-0 text-decoration-none"
+                <div class="ms-3 claude-accordion">
+                    <button type="button"
+                            class="claude-accordion-header"
+                            [class.is-open]="historyExpanded"
+                            [attr.aria-expanded]="historyExpanded"
                             (click)="historyExpanded = !historyExpanded">
-                        <i class="fas" [class.fa-chevron-down]="historyExpanded"
-                                        [class.fa-chevron-right]="!historyExpanded"></i>
-                        History ({{closedSessions.length}}<span *ngIf="sessionFilter">, {{filteredClosedSessions.length}} match</span>)
+                        <i class="fas fa-chevron-right accordion-chevron"></i>
+                        <span class="accordion-title">History</span>
+                        <span class="accordion-count"
+                              [class.is-match]="sessionFilter && filteredClosedSessions.length > 0">
+                            <ng-container *ngIf="!sessionFilter">{{closedSessions.length}}</ng-container>
+                            <ng-container *ngIf="sessionFilter">{{filteredClosedSessions.length}} / {{closedSessions.length}}</ng-container>
+                        </span>
                     </button>
 
-                    <div *ngIf="historyExpanded" class="mt-2">
+                    <div *ngIf="historyExpanded" class="claude-accordion-body">
                         <div class="row mb-2">
                             <div class="col-6 col-md-4">
                                 <label class="form-label small">Retention (days)</label>
@@ -1878,7 +2010,7 @@ interface BackendOption {
                                 <table *ngIf="isClosedGroupExpanded(group.cwd)"
                                        class="table table-sm mb-0 session-table">
                                     <tbody>
-                                        <tr *ngFor="let s of group.sessions">
+                                        <tr *ngFor="let s of group.sessions; trackBy: trackBySessionId">
                                             <td>
                                                 <div class="copyable-row small text-muted">
                                                     <code>{{s.sessionId}}</code>
@@ -2020,6 +2152,7 @@ interface BackendOption {
 
             <!-- ============== HOOKS TAB ============== -->
             <div *ngIf="activeTab === 'hooks'">
+            <div class="tab-pane-narrow">
 
             <!-- Hook Setup -->
             <div class="d-flex align-items-center gap-2 mb-1">
@@ -2235,6 +2368,8 @@ interface BackendOption {
                 </div>
             </div>
 
+            </div><!-- /tab-pane-narrow (Hooks top section) -->
+
             <!-- Recent activity ─────────────────────────────────────── -->
             <h5 class="mt-4 mb-2 d-flex align-items-center gap-2">
                 Recent activity
@@ -2290,19 +2425,27 @@ interface BackendOption {
                 </span>
             </div>
 
-            <table *ngIf="filteredActivityEntries.length > 0"
-                   class="table table-sm" style="max-width: 1100px">
+            <div *ngIf="filteredActivityEntries.length > 0"
+                 class="activity-scroll-viewport"
+                 (scroll)="onActivityScroll($event)">
+            <table class="table table-sm">
                 <thead>
                     <tr>
-                        <th style="width: 80px">Time</th>
-                        <th style="width: 90px">Status</th>
-                        <th style="width: 150px">Event</th>
-                        <th style="width: 130px">Audio outcome</th>
+                        <th style="width: 110px">Time</th>
+                        <th style="width: 100px">Status</th>
+                        <th style="width: 200px">Event</th>
+                        <th style="width: 140px">Audio outcome</th>
                         <th>Detail</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <tr *ngFor="let e of filteredActivityEntries"
+                    <tr *ngIf="activityTopSpacerHeight > 0"
+                        aria-hidden="true"
+                        [style.height.px]="activityTopSpacerHeight">
+                        <td colspan="5" style="padding: 0; border: 0;"></td>
+                    </tr>
+                    <tr *ngFor="let e of visibleActivityEntries; trackBy: trackActivityEntry"
+                        class="activity-row"
                         [title]="formatActivityTooltip(e)">
                         <td><code class="small">{{formatActivityTime(e.ts)}}</code></td>
                         <td>
@@ -2329,35 +2472,43 @@ interface BackendOption {
                                 {{e.audioOutcome || 'pending'}}
                             </span>
                         </td>
-                        <td class="small">
-                            <div *ngIf="e.audioPayload">
-                                <span class="text-muted">{{e.audioMode === 'sound' ? 'sound' : 'tts'}}:</span>
-                                <code class="ms-1">{{e.audioPayload}}</code>
-                            </div>
-                            <div *ngIf="e.audioOutcomeDetail" class="text-muted">
-                                {{e.audioOutcomeDetail}}
-                            </div>
-                            <div *ngIf="e.metadata?.type" class="text-muted">
-                                type: <code>{{e.metadata.type}}</code>
-                            </div>
-                            <div *ngIf="e.metadata?.tool" class="text-muted">
-                                tool: <code>{{e.metadata.tool}}</code>
-                            </div>
-                            <div *ngIf="e.terminalTitle" class="text-muted">
-                                tab: {{e.terminalTitle}}
-                            </div>
-                            <div *ngIf="e.session" class="text-muted">
-                                session: <code>{{e.session.substring(0, 8)}}…</code>
+                        <td class="small detail-cell">
+                            <div class="detail-inner">
+                                <span *ngIf="e.audioPayload">
+                                    <span class="text-muted">{{e.audioMode === 'sound' ? 'sound' : 'tts'}}:</span>
+                                    <code class="ms-1">{{e.audioPayload}}</code>
+                                </span>
+                                <span *ngIf="e.audioOutcomeDetail" class="text-muted ms-2">
+                                    {{e.audioOutcomeDetail}}
+                                </span>
+                                <span *ngIf="e.metadata?.type" class="text-muted ms-2">
+                                    type: <code>{{e.metadata.type}}</code>
+                                </span>
+                                <span *ngIf="e.metadata?.tool" class="text-muted ms-2">
+                                    tool: <code>{{e.metadata.tool}}</code>
+                                </span>
+                                <span *ngIf="e.terminalTitle" class="text-muted ms-2">
+                                    tab: {{e.terminalTitle}}
+                                </span>
+                                <span *ngIf="e.session" class="text-muted ms-2">
+                                    session: <code>{{e.session.substring(0, 8)}}…</code>
+                                </span>
                             </div>
                         </td>
                     </tr>
+                    <tr *ngIf="activityBottomSpacerHeight > 0"
+                        aria-hidden="true"
+                        [style.height.px]="activityBottomSpacerHeight">
+                        <td colspan="5" style="padding: 0; border: 0;"></td>
+                    </tr>
                 </tbody>
             </table>
+            </div>
 
             </div><!-- /hooks tab -->
 
             <!-- ============== DIAGNOSTICS TAB ============== -->
-            <div *ngIf="activeTab === 'diagnostics'">
+            <div *ngIf="activeTab === 'diagnostics'" class="tab-pane-narrow">
 
             <!-- Diagnostics -->
             <h5>Diagnostics</h5>
@@ -2570,6 +2721,27 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     activityLogPath = ''
     private activityUnsubscribe: (() => void) | null = null
 
+    /** ── Recent-activity virtualization state ──────────────────────────
+     * We render only the slice of rows that fits inside the scroll
+     * viewport (plus a small overscan). Each row is `activityRowHeight`
+     * tall; top/bottom spacer rows reserve the rest of the scrollbar
+     * travel. Without this, 5000 entries would put 5000 <tr> elements
+     * into the DOM. */
+    private readonly activityRowHeight = 44
+    activityVisibleStart = 0
+    activityVisibleEnd = 30
+    private _activityCacheKey = ''
+    private _activityCache: ActivityLogEntry[] = []
+    /** Tracks the filter/text portion of the activity cache key so the scroll
+     *  window is reset only on filter changes, not on appends. */
+    private _activityFilterKey = ''
+    /** The `speechSynthesis.onvoiceschanged` handler we installed, kept so
+     *  ngOnDestroy can detach exactly ours (speechSynthesis is a global that
+     *  outlives the component — leaving the handler set keeps the destroyed
+     *  component and its whole injector graph reachable). */
+    private voicesChangedHandler: (() => void) | null = null
+    private _activityViewportRef: HTMLElement | null = null
+
     historyExpanded = false
     previousRunExpanded = true
     sessionFilter = ''
@@ -2703,9 +2875,36 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         private claudeApi: ClaudeApiService,
         _transcriptReader: TranscriptReaderService,
         private credentialsService: ClaudeCredentialsService,
+        private hostEl: ElementRef<HTMLElement>,
     ) {}
 
+    /**
+     * Tabby's `settings-tab-body` host caps content at 600px max-width. The
+     * Claude Status panel has dense forms (audio config, hook setup, session
+     * lists) that read much better wider, so we lift the cap while we're
+     * mounted and restore it on destroy — no global stylesheet leak.
+     */
+    private prevMaxWidth: string | null = null
+    private widenedHost: HTMLElement | null = null
+    private widenSettingsHost(): void {
+        let el: HTMLElement | null = this.hostEl.nativeElement
+        while (el && el.tagName.toLowerCase() !== 'settings-tab-body') {
+            el = el.parentElement
+        }
+        if (!el) return
+        this.widenedHost = el
+        this.prevMaxWidth = el.style.maxWidth
+        el.style.maxWidth = 'none'
+    }
+    private restoreSettingsHost(): void {
+        if (!this.widenedHost) return
+        this.widenedHost.style.maxWidth = this.prevMaxWidth ?? ''
+        this.widenedHost = null
+        this.prevMaxWidth = null
+    }
+
     ngOnInit(): void {
+        this.widenSettingsHost()
         // Ensure config defaults exist in store
         if (!this.config.store.claudeStatus) {
             this.config.store.claudeStatus = { ...DEFAULT_CONFIG }
@@ -2786,26 +2985,41 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         // Anything that touches the disk / spawns a process MUST be
         // deferred — otherwise it blocks the first paint and the panel
         // renders blank for seconds (cold WSL was the worst offender).
+        const t0 = performance.now()
+        const mark = (label: string, since: number) => {
+            const dt = performance.now() - since
+            if (dt > 50) console.warn(`[claude-status] ngOnInit ${label} took ${dt.toFixed(0)}ms`)
+        }
 
+        let t = performance.now()
         this.refreshSessions()
+        mark('refreshSessions', t)
 
+        t = performance.now()
         this.backends = this.audioService.listAllBackends().map((b) => ({
             id: b.id,
             label: b.label,
             available: null,
             voices: [],
         }))
+        mark('listAllBackends', t)
+
+        t = performance.now()
         for (const entry of this.backends) this.probeBackend(entry)
+        mark('probeBackend kickoff', t)
 
         if (typeof window !== 'undefined' && window.speechSynthesis) {
-            window.speechSynthesis.onvoiceschanged = () => {
+            this.voicesChangedHandler = () => {
                 const ws = this.backends.find((b) => b.id === 'webspeech')
                 if (ws) this.probeBackend(ws)
             }
+            window.speechSynthesis.onvoiceschanged = this.voicesChangedHandler
         }
 
+        t = performance.now()
         this.hookJsPath = this.getHookJsPath()
         this.hookJsExists = fs.existsSync(this.hookJsPath)
+        mark('hookJs probe', t)
         document.addEventListener('click', this.docClickListener, true)
 
         this.refreshTicker = setInterval(() => {
@@ -2813,12 +3027,20 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         }, 5000)
 
         if (this.config.store.claudeStatus.audio?.mode === 'sound') {
+            t = performance.now()
             this.refreshSoundLibrary()
+            mark('refreshSoundLibrary', t)
         }
 
+        t = performance.now()
         this.activityLogPath = this.activityLog.filePath
         this.refreshActivityLog()
+        mark('refreshActivityLog', t)
         this.activityUnsubscribe = this.activityLog.subscribe(() => this.refreshActivityLog())
+
+        console.log(
+            `[claude-status] ngOnInit sync portion: ${(performance.now() - t0).toFixed(0)}ms`,
+        )
 
         // Light up loading skeletons immediately for everything we're about
         // to fetch off the main path.
@@ -3234,8 +3456,20 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         // New backend → re-sync the filter to that backend's saved
         // voice. Drops any "user touched" pin from the previous backend.
         this.voiceLanguageFilterTouched = false
-        this.voicesLoading = !this.currentBackend?.voices?.length
-        if (!this.voicesLoading) this.syncFilterToSelection()
+        // Only show the "Loading voices…" spinner while a probe is genuinely in
+        // flight (available === null). A backend that was already probed and
+        // legitimately has zero voices (e.g. Piper before install) must NOT
+        // leave the spinner stuck forever — nothing would ever clear it, since
+        // probeBackend isn't re-invoked here.
+        const backend = this.currentBackend
+        if (backend && backend.available === null) {
+            this.voicesLoading = true
+            // Kick a probe so the flag is eventually cleared by probeBackend.
+            this.probeBackend(backend)
+        } else {
+            this.voicesLoading = false
+            this.syncFilterToSelection()
+        }
     }
 
     save(): void {
@@ -3686,12 +3920,27 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         this.sessions = this.sessionRestore.list()
     }
 
+    // NOTE: these buckets are derived from the locally-cached `this.sessions`
+    // array (refreshed by `refreshSessions()` on a 5s ticker + after every
+    // mutation) — NOT from `sessionRestore.activeSessions()`/`previousRunSessions()`,
+    // which read + parse the sessions file from disk. These getters are bound
+    // directly in the template, so Angular evaluates them on EVERY change-
+    // detection pass (every keystroke in any Tabby terminal). Hitting the disk
+    // there both thrashed I/O and returned brand-new object instances each
+    // pass, which made the *ngFor tear down and rebuild the whole <tbody> on
+    // every keypress — and destroyed the Resume/dropdown buttons mid-click so
+    // they registered as no-ops. Deriving from the stable cache keeps row
+    // object identities stable between refreshes; trackBy on the loops keeps
+    // the DOM intact across the 5s swap.
     get activeSessions(): ClaudeSessionRecord[] {
-        return this.sessionRestore.activeSessions()
+        const runId = this.sessionRestore.getCurrentRunId()
+        return this.sessions.filter((s) => !s.closed && s.runId === runId)
     }
 
     get previousRunSessions(): ClaudeSessionRecord[] {
-        return this.sessionRestore.previousRunSessions()
+        const prev = this.sessionRestore.getPreviousRunId()
+        if (!prev) return []
+        return this.sessions.filter((s) => !s.closed && s.runId === prev)
     }
 
     get closedSessions(): ClaudeSessionRecord[] {
@@ -3975,8 +4224,18 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             clearTimeout(this.resumeErrorTimer)
             this.resumeErrorTimer = null
         }
+        if (
+            this.voicesChangedHandler &&
+            typeof window !== 'undefined' &&
+            window.speechSynthesis &&
+            window.speechSynthesis.onvoiceschanged === this.voicesChangedHandler
+        ) {
+            window.speechSynthesis.onvoiceschanged = null
+        }
+        this.voicesChangedHandler = null
         this.stopPiperVoicePreview()
         document.removeEventListener('click', this.docClickListener, true)
+        this.restoreSettingsHost()
     }
 
     // ── Subscription credentials (Audio tab → Dynamic mode) ─────────
@@ -4148,8 +4407,15 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     }
 
     get filteredActivityEntries(): ActivityLogEntry[] {
+        // Memoised: change detection hits this getter many times per tick.
+        // Re-filtering 5000 entries on every read would defeat the
+        // virtualization. Cache by (length, filter, text) — entries are
+        // append-mostly, so length is a good proxy for "did the source
+        // change". When the list churns we recompute fully.
+        const key = `${this.activityEntries.length}|${this.activityFilter}|${this.activityTextFilter}`
+        if (key === this._activityCacheKey) return this._activityCache
         const text = this.activityTextFilter.trim().toLowerCase()
-        return this.activityEntries.filter((e) => {
+        this._activityCache = this.activityEntries.filter((e) => {
             if (this.activityFilter && e.status !== this.activityFilter) return false
             if (!text) return true
             const haystack = [
@@ -4166,6 +4432,65 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                 .toLowerCase()
             return haystack.includes(text)
         })
+        this._activityCacheKey = key
+        // Only reset the scroll window when the FILTER changed — not on a pure
+        // append. refreshActivityLog() runs every 5s and on every log event, so
+        // keying the reset on length would yank the viewport back to the top
+        // each time a new entry lands while the user is scrolled down reading
+        // an old one. Clamp the existing window to the (possibly grown/shrunk)
+        // list instead.
+        const filterKey = `${this.activityFilter}|${this.activityTextFilter}`
+        if (filterKey !== this._activityFilterKey) {
+            this._activityFilterKey = filterKey
+            this.activityVisibleStart = 0
+            this.activityVisibleEnd = Math.min(30, this._activityCache.length)
+        } else {
+            const len = this._activityCache.length
+            this.activityVisibleStart = Math.min(this.activityVisibleStart, Math.max(0, len - 1))
+            this.activityVisibleEnd = Math.min(this.activityVisibleEnd, len)
+        }
+        return this._activityCache
+    }
+
+    /** The slice of rows that's actually rendered. */
+    get visibleActivityEntries(): ActivityLogEntry[] {
+        return this.filteredActivityEntries.slice(
+            this.activityVisibleStart,
+            this.activityVisibleEnd,
+        )
+    }
+
+    /** Height (px) of the spacer row above the rendered slice. */
+    get activityTopSpacerHeight(): number {
+        return this.activityVisibleStart * this.activityRowHeight
+    }
+
+    /** Height (px) of the spacer row below the rendered slice. */
+    get activityBottomSpacerHeight(): number {
+        const total = this.filteredActivityEntries.length
+        return Math.max(0, total - this.activityVisibleEnd) * this.activityRowHeight
+    }
+
+    /** trackBy for the activity *ngFor — keeps row DOM nodes stable as
+     *  the visible window slides, avoiding tear-down/recreate churn. */
+    trackActivityEntry = (_: number, e: ActivityLogEntry): string => `${e.ts}|${e.session ?? ''}`
+
+    /** Wired to the viewport's (scroll) event. Recomputes the visible
+     *  window from scrollTop + clientHeight, with a small overscan so
+     *  fast scrolls don't flash blank space. */
+    onActivityScroll(ev: Event): void {
+        const el = ev.target as HTMLElement
+        this._activityViewportRef = el
+        const total = this.filteredActivityEntries.length
+        const rh = this.activityRowHeight
+        const overscan = 5
+        const start = Math.max(0, Math.floor(el.scrollTop / rh) - overscan)
+        const visibleCount = Math.ceil(el.clientHeight / rh) + overscan * 2
+        const end = Math.min(total, start + visibleCount)
+        if (start !== this.activityVisibleStart || end !== this.activityVisibleEnd) {
+            this.activityVisibleStart = start
+            this.activityVisibleEnd = end
+        }
     }
 
     formatActivityTime(ts: number): string {
@@ -4895,9 +5220,34 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         }
 
         if (removed > 0) {
-            fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+            this.writeJsonAtomic(settingsPath, settings)
         }
         return removed
+    }
+
+    /**
+     * Write JSON to `filePath` atomically (temp file in the same dir + rename).
+     * `~/.claude/settings.json` is Claude Code's shared config for ALL tools; a
+     * crash or dropped connection mid-write (more likely over the slow
+     * `\\wsl.localhost\` 9P UNC path) would otherwise truncate it and break
+     * Claude Code for everything, not just this plugin.
+     */
+    private writeJsonAtomic(filePath: string, obj: unknown): void {
+        const tmp = `${filePath}.tmp-${process.pid}`
+        fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf-8')
+        try {
+            fs.renameSync(tmp, filePath)
+        } catch (err) {
+            // Clean up the temp file so we don't litter the .claude dir if the
+            // rename fails (e.g. cross-device, which shouldn't happen here since
+            // tmp is a sibling, but be safe).
+            try {
+                fs.unlinkSync(tmp)
+            } catch {
+                /* noop */
+            }
+            throw err
+        }
     }
 
     private writeHooksToTarget(target: SetupTarget): void {
@@ -4948,7 +5298,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             }
         }
 
-        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+        this.writeJsonAtomic(settingsPath, settings)
     }
 
     /**

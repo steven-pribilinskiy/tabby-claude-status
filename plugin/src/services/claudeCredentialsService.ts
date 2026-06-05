@@ -64,15 +64,16 @@ export class ClaudeCredentialsService {
 
     getStatus(): CredentialsStatus {
         if (this.cached && Date.now() - this.cached.readAt < CACHE_MS) {
-            // Re-evaluate expiry on every call; the underlying file hasn't
-            // been re-read but the access token might have just timed out.
             const fresh = this.cached.status
+            // If the cached token has expired since we read it, don't report a
+            // stale "expired" — the file may already hold a refreshed token
+            // (running `claude` rewrites it). Re-read from disk and re-cache so
+            // a refresh becomes visible immediately rather than after the 30s
+            // cache window elapses.
             if (fresh.state === 'ok' && fresh.creds && fresh.creds.expiresAt <= Date.now()) {
-                return {
-                    state: 'expired',
-                    filePath: fresh.filePath,
-                    detail: 'OAuth token has expired since it was last read.',
-                }
+                const status = this.read()
+                this.cached = { status, readAt: Date.now() }
+                return status
             }
             return fresh
         }

@@ -170,7 +170,16 @@ process.stdin.on('end', () => {
         // a context-aware announcement; without forwarding it we'd need a
         // separate session→path lookup on the plugin side.
         if (event.transcript_path) status.transcript_path = event.transcript_path
-        fs.writeFileSync(STATUS_FILE, JSON.stringify(status))
+        // Atomic write: temp file + rename. The plugin watches STATUS_FILE and
+        // reads it on every change; a plain in-place writeFileSync lets the
+        // watcher fire and read a half-written, unparseable file (the read is
+        // caught but the event is then silently dropped). Writing to a
+        // per-pid temp file and renaming over the target means the watcher
+        // only ever sees a complete file. The `.tmp-<pid>` suffix avoids
+        // collisions when multiple sessions' hooks fire concurrently.
+        const tmpFile = `${STATUS_FILE}.tmp-${process.pid}`
+        fs.writeFileSync(tmpFile, JSON.stringify(status))
+        fs.renameSync(tmpFile, STATUS_FILE)
 
         // Fire-and-forget seed to the companion webapp so its
         // session→ancestors cache is populated for subsequent curl-only events.

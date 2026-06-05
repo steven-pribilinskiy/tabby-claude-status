@@ -3,11 +3,28 @@
 // Run via: npm run install-plugin (after `npm run build`)
 
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
+
+/** Tabby's per-user config dir, cross-platform. Without this the script
+ *  blindly used %APPDATA% and threw an opaque `path.join(undefined, …)`
+ *  TypeError on macOS/Linux (where APPDATA is unset). */
+function tabbyConfigDir() {
+    if (process.platform === 'win32') {
+        if (!process.env.APPDATA) {
+            throw new Error('APPDATA is not set — cannot locate the Tabby plugins directory.')
+        }
+        return path.join(process.env.APPDATA, 'tabby')
+    }
+    if (process.platform === 'darwin') {
+        return path.join(os.homedir(), 'Library', 'Application Support', 'tabby')
+    }
+    return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'tabby')
+}
 
 const pluginName = 'tabby-claude-status'
 const src = path.join(__dirname, '..')
-const dest = path.join(process.env.APPDATA, 'tabby', 'plugins', 'node_modules', pluginName)
+const dest = path.join(tabbyConfigDir(), 'plugins', 'node_modules', pluginName)
 
 fs.rmSync(dest, { recursive: true, force: true })
 fs.mkdirSync(path.join(dest, 'dist'), { recursive: true })

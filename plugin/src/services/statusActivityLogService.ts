@@ -57,7 +57,7 @@ export interface ActivityLogEntry {
     metadata?: Record<string, unknown>
 }
 
-const MAX_ENTRIES = 500
+const MAX_ENTRIES = 5000
 
 /**
  * Logs every Claude-status event the plugin reacts to and persists the rolling
@@ -161,18 +161,21 @@ export class StatusActivityLogService {
         this.flushHandle = setTimeout(() => {
             this.flushHandle = null
             try {
-                fs.writeFileSync(
-                    ACTIVITY_LOG_FILE,
-                    JSON.stringify(
-                        {
-                            version: 1,
-                            updated: Date.now(),
-                            entries: this.entries,
-                        },
-                        null,
-                        2,
-                    ),
+                // Atomic write so a concurrent reader (e.g. the settings tab's
+                // loadFromDisk on open) never parses a half-written log and
+                // throws it all away as corrupt.
+                const payload = JSON.stringify(
+                    {
+                        version: 1,
+                        updated: Date.now(),
+                        entries: this.entries,
+                    },
+                    null,
+                    2,
                 )
+                const tmp = `${ACTIVITY_LOG_FILE}.tmp-${process.pid}`
+                fs.writeFileSync(tmp, payload)
+                fs.renameSync(tmp, ACTIVITY_LOG_FILE)
             } catch (err) {
                 console.warn('[claude-status] Failed to flush activity log:', err)
             }
