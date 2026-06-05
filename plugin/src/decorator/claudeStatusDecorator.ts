@@ -16,7 +16,17 @@ import { SessionRestoreService } from '../services/sessionRestoreService'
 import { StatusActivityLogService } from '../services/statusActivityLogService'
 import { StatusParserService } from '../services/statusParserService'
 
-const STATUS_FILE = path.join(os.tmpdir(), 'tabby-claude-status.json')
+/**
+ * Spool directory for status events. hook.js drops one file per event here
+ * (atomic temp+rename, unique filename), and the decorator processes then
+ * deletes each. A spool dir — rather than the old single overwrite-in-place
+ * file — means concurrent hooks from multiple Claude sessions can't clobber
+ * each other's event before the watcher reads it: every event survives as its
+ * own file until consumed.
+ */
+const STATUS_DIR = path.join(os.tmpdir(), 'tabby-claude-status.d')
+/** Legacy single-file path from before the spool dir. Cleaned up on startup. */
+const LEGACY_STATUS_FILE = path.join(os.tmpdir(), 'tabby-claude-status.json')
 
 /** Lazy handle to the current Electron BrowserWindow via @electron/remote. */
 let cachedBrowserWindow: any | null = null
@@ -54,6 +64,9 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
     private recentEventSigs: Set<string> = new Set()
     private recentEventOrder: string[] = []
     private static readonly MAX_RECENT_SIGS = 50
+    /** Spool filenames currently being read, so overlapping watch fires don't
+     *  double-process the same event before it's deleted. */
+    private processingFiles: Set<string> = new Set()
     /**
      * Flipped to true when the renderer fires `beforeunload` — i.e. the
      * user is closing the Tabby window. Tabby then mass-detaches every
@@ -218,12 +231,14 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
 
     private startFileWatcher(): void {
         try {
-            if (!fs.existsSync(STATUS_FILE)) {
-                fs.writeFileSync(STATUS_FILE, '{}')
-            }
+            fs.mkdirSync(STATUS_DIR, { recursive: true })
+            this.cleanupSpoolDir()
+            // Drain anything already waiting (events that fired during startup,
+            // before the watcher attached).
+            this.processSpoolDir()
 
-            this.fileWatcher = fs.watch(STATUS_FILE, { persistent: false }, () => {
-                this.handleFileChange()
+            this.fileWatcher = fs.watch(STATUS_DIR, { persistent: false }, () => {
+                this.processSpoolDir()
             })
 
             this.fileWatcher.on('error', () => {
@@ -231,14 +246,14 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 this.startPolling()
             })
 
-            this.configService.debug('File watcher started:', STATUS_FILE)
+            this.configService.debug('File watcher started:', STATUS_DIR)
         } catch (_) {
             this.startPolling()
         }
     }
 
     private startPolling(): void {
-        this.pollInterval = setInterval(() => this.handleFileChange(), 500)
+        this.pollInterval = setInterval(() => this.processSpoolDir(), 500)
     }
 
     private stopFileWatcher(): void {
@@ -252,13 +267,77 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         }
     }
 
-    private handleFileChange(): void {
+    /** One-time cleanup on startup: remove the legacy single status file and
+     *  any stale `.tmp` leftovers from a hook that crashed mid-write. */
+    private cleanupSpoolDir(): void {
         try {
-            const raw = fs.readFileSync(STATUS_FILE, 'utf-8')
-            if (!raw || raw === '{}') return
+            fs.unlinkSync(LEGACY_STATUS_FILE)
+        } catch {
+            /* not present — fine */
+        }
+        try {
+            for (const name of fs.readdirSync(STATUS_DIR)) {
+                if (name.endsWith('.tmp')) {
+                    try {
+                        fs.unlinkSync(path.join(STATUS_DIR, name))
+                    } catch {
+                        /* racing a live write — leave it */
+                    }
+                }
+            }
+        } catch {
+            /* dir vanished — fine */
+        }
+    }
 
-            const data = JSON.parse(raw)
-            if (!data.ts || !data.event) return
+    /**
+     * Read every pending event file in the spool dir, in chronological order
+     * (filenames are `<ts>-<pid>-<rand>.json`), process it, and delete it.
+     * Each file is consumed exactly once even if the watcher fires multiple
+     * times for the same batch.
+     */
+    private processSpoolDir(): void {
+        let names: string[]
+        try {
+            names = fs.readdirSync(STATUS_DIR)
+        } catch {
+            return
+        }
+        names = names.filter((n) => n.endsWith('.json')).sort()
+        for (const name of names) {
+            if (this.processingFiles.has(name)) continue
+            this.processingFiles.add(name)
+            const full = path.join(STATUS_DIR, name)
+            let data: any
+            try {
+                const raw = fs.readFileSync(full, 'utf-8')
+                data = JSON.parse(raw)
+            } catch {
+                // Couldn't read/parse. Atomic rename means a present file is
+                // complete, so this is a transient FS hiccup — leave it for the
+                // next pass rather than deleting an event we never saw.
+                this.processingFiles.delete(name)
+                continue
+            }
+            // Consume the file regardless of how we handle the data, so stale
+            // or duplicate events don't accumulate.
+            try {
+                fs.unlinkSync(full)
+            } catch {
+                /* already gone */
+            }
+            this.processingFiles.delete(name)
+            try {
+                this.handleEventData(data)
+            } catch (_) {
+                /* a bad event shouldn't stall the rest of the batch */
+            }
+        }
+    }
+
+    private handleEventData(data: any): void {
+        try {
+            if (!data || !data.ts || !data.event) return
 
             // Staleness gate first: ignore events older than 10s (e.g. a stale
             // file left over from a previous run, read on startup). Uses a time
@@ -266,9 +345,9 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             // can't wedge it permanently.
             if (Date.now() - data.ts > 10000) return
 
-            // Dedupe fs.watch's duplicate fires for one write. A distinct event
-            // sharing a millisecond with a prior one has a different signature
-            // and is still processed.
+            // Dedupe in case the same event is somehow seen twice. A distinct
+            // event sharing a millisecond with a prior one has a different
+            // signature and is still processed.
             const sig = `${data.ts}|${data.event}|${data.session || ''}|${data.tool || ''}`
             if (this.recentEventSigs.has(sig)) return
             this.recentEventSigs.add(sig)
@@ -339,7 +418,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 })
             }
         } catch (_) {
-            // File might be mid-write
+            // Defensive: a malformed payload shouldn't break the watcher.
         }
     }
 

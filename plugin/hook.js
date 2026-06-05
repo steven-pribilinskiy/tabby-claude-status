@@ -5,7 +5,11 @@ const os = require('node:os')
 const path = require('node:path')
 const { execSync } = require('node:child_process')
 
-const STATUS_FILE = path.join(os.tmpdir(), 'tabby-claude-status.json')
+// Spool directory: one file per event (atomic temp+rename, unique name). The
+// plugin processes then deletes each file. Using a directory rather than a
+// single overwrite-in-place file means hooks from concurrent Claude sessions
+// can't clobber each other's event before the plugin reads it.
+const STATUS_DIR = path.join(os.tmpdir(), 'tabby-claude-status.d')
 
 // ── Platform-specific process tree walkers ──────────────────────────
 
@@ -170,16 +174,15 @@ process.stdin.on('end', () => {
         // a context-aware announcement; without forwarding it we'd need a
         // separate session→path lookup on the plugin side.
         if (event.transcript_path) status.transcript_path = event.transcript_path
-        // Atomic write: temp file + rename. The plugin watches STATUS_FILE and
-        // reads it on every change; a plain in-place writeFileSync lets the
-        // watcher fire and read a half-written, unparseable file (the read is
-        // caught but the event is then silently dropped). Writing to a
-        // per-pid temp file and renaming over the target means the watcher
-        // only ever sees a complete file. The `.tmp-<pid>` suffix avoids
-        // collisions when multiple sessions' hooks fire concurrently.
-        const tmpFile = `${STATUS_FILE}.tmp-${process.pid}`
+        // Drop one file per event into the spool dir, written atomically
+        // (temp + rename) so the plugin never reads a half-written file, and
+        // with a unique name so concurrent hooks never overwrite each other.
+        fs.mkdirSync(STATUS_DIR, { recursive: true })
+        const rand = Math.random().toString(36).slice(2, 8)
+        const finalFile = path.join(STATUS_DIR, `${status.ts}-${process.pid}-${rand}.json`)
+        const tmpFile = `${finalFile}.tmp`
         fs.writeFileSync(tmpFile, JSON.stringify(status))
-        fs.renameSync(tmpFile, STATUS_FILE)
+        fs.renameSync(tmpFile, finalFile)
 
         // Fire-and-forget seed to the companion webapp so its
         // session→ancestors cache is populated for subsequent curl-only events.
