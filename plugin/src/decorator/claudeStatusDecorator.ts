@@ -48,7 +48,15 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
     private currentStatus: Map<BaseTerminalTabComponent, ClaudeStatusName> = new Map()
     private terminals: Set<BaseTerminalTabComponent> = new Set()
     private terminalPids: Map<BaseTerminalTabComponent, number> = new Map()
+    /** Latest working directory reported by each terminal via OSC 7 / OSC 1337,
+     *  normalised. Used to match WSL sessions to their tab by cwd when PID
+     *  matching can't (Linux hook PIDs never equal Windows conpty PIDs). */
+    private terminalCwds: Map<BaseTerminalTabComponent, string> = new Map()
     private sessionTerminals: Map<string, BaseTerminalTabComponent> = new Map()
+    /** OSC 7: `ESC ] 7 ; file://<host><path> (BEL|ST)`. Captures `<path>`. */
+    private static readonly OSC7_RE = /\x1b\]7;file:\/\/[^/]*(\/[^\x07\x1b]*)(?:\x07|\x1b\\)/g
+    /** OSC 1337 CurrentDir variant: `ESC ] 1337 ; CurrentDir=<path> (BEL|ST)`. */
+    private static readonly OSC1337_CWD_RE = /\x1b\]1337;CurrentDir=([^\x07\x1b]*)(?:\x07|\x1b\\)/g
     private fileWatcher: fs.FSWatcher | null = null
     private pollInterval: ReturnType<typeof setInterval> | null = null
     /**
@@ -164,11 +172,13 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             this.startFileWatcher()
         }
 
-        // Also listen for escape sequences (e.g. manual printf testing)
+        // Also listen for escape sequences (e.g. manual printf testing) and
+        // track the terminal's reported cwd (OSC 7 / OSC 1337) for WSL matching.
         this.subscribeUntilDetached(
             terminal,
             terminal.output$.subscribe((data: string) => {
                 this.handleOutput(terminal, data)
+                this.trackTerminalCwd(terminal, data)
             }),
         )
     }
@@ -179,6 +189,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         this.restoreTitle(terminal)
         this.currentStatus.delete(terminal)
         this.terminalPids.delete(terminal)
+        this.terminalCwds.delete(terminal)
         this.terminals.delete(terminal)
 
         // Push any Claude sessions that were running in this tab into the
@@ -448,7 +459,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                     return terminal
                 }
             }
-            this.configService.debug('PID match: no match found, falling back to all terminals')
+            this.configService.debug('PID match: no match found, falling back to cwd match')
         } else {
             this.configService.debug(
                 'PID match: skipped — ancestors=',
@@ -458,7 +469,72 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             )
         }
 
+        // cwd fallback — this is what makes WSL sessions match. The hook runs
+        // inside the WSL VM and reports Linux ancestor PIDs that can never
+        // equal Tabby's Windows conpty PIDs, so PID matching always misses for
+        // WSL. But the shell reports its working directory via OSC 7 (and some
+        // via OSC 1337 CurrentDir), which we track per-terminal from the output
+        // stream. Match the event's cwd to the terminal sitting in that dir.
+        const eventCwd = this.normalizeCwd(data.cwd)
+        if (eventCwd && this.terminalCwds.size > 0) {
+            const matches: BaseTerminalTabComponent[] = []
+            for (const [terminal, cwd] of this.terminalCwds) {
+                if (cwd === eventCwd && this.terminals.has(terminal)) matches.push(terminal)
+            }
+            // Only trust an unambiguous match — if two tabs sit in the same
+            // directory we can't tell which fired the event, so fall through to
+            // the global path rather than decorate the wrong tab.
+            if (matches.length === 1) {
+                const terminal = matches[0]
+                if (session) this.sessionTerminals.set(session, terminal)
+                this.configService.debug('cwd match: MATCHED terminal for cwd', eventCwd)
+                return terminal
+            }
+            this.configService.debug(
+                'cwd match: ambiguous/none for cwd',
+                eventCwd,
+                '— candidates:',
+                matches.length,
+            )
+        }
+
         return null
+    }
+
+    /**
+     * Track a terminal's current working directory from OSC escape sequences
+     * in its output stream. OSC 7 (`file://host/path`) is the de-facto standard
+     * and is emitted by most modern shell setups (incl. default WSL bash/zsh);
+     * OSC 1337 `CurrentDir=` is iTerm's variant. Used as the WSL-friendly
+     * fallback in `findTerminalForEvent`.
+     */
+    private trackTerminalCwd(terminal: BaseTerminalTabComponent, data: string): void {
+        if (!data || data.indexOf('\x1b]') === -1) return
+        let raw: string | undefined
+        let m: RegExpExecArray | null
+        ClaudeStatusDecorator.OSC7_RE.lastIndex = 0
+        // Take the last match in the chunk — that's the most recent cd.
+        while ((m = ClaudeStatusDecorator.OSC7_RE.exec(data)) !== null) raw = m[1]
+        if (raw === undefined) {
+            ClaudeStatusDecorator.OSC1337_CWD_RE.lastIndex = 0
+            while ((m = ClaudeStatusDecorator.OSC1337_CWD_RE.exec(data)) !== null) raw = m[1]
+        }
+        if (raw === undefined) return
+        const norm = this.normalizeCwd(raw)
+        if (norm) this.terminalCwds.set(terminal, norm)
+    }
+
+    /** Normalise a path for cwd comparison: percent-decode, unify separators,
+     *  drop any trailing separator. Returns '' for empty input. */
+    private normalizeCwd(p: string | undefined): string {
+        if (!p) return ''
+        let out = p
+        try {
+            out = decodeURIComponent(out)
+        } catch {
+            /* malformed %-escape — compare raw */
+        }
+        return out.replace(/\\/g, '/').replace(/\/+$/, '')
     }
 
     // ── Escape sequence parsing (secondary / testing) ──────────────
