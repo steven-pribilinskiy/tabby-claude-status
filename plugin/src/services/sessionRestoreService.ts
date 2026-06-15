@@ -35,6 +35,20 @@ interface SessionsFile {
     currentRunId?: string
     /** @deprecated superseded by the RUNS_DIR registry. Kept for back-compat. */
     previousRunId?: string | null
+    /**
+     * Run ids whose sessions form the "Previous run" bucket. Persisted (rather
+     * than recomputed from the registry each launch) so the bucket is *sticky*:
+     * a run's open sessions stay under "Previous run" across multiple Tabby
+     * launches until they're explicitly resumed, closed, or retention-pruned.
+     *
+     * Without this, the previous-run rotation was one-shot — the registry file
+     * for a dead run is deleted the first time it's classified, so a single
+     * extra launch (e.g. a frozen Tabby that registered a run but recorded no
+     * sessions, then got killed) consumed the rotation and demoted the real
+     * pre-crash sessions straight to History. Pruned on write to ids that still
+     * have at least one open session, so it can't grow without bound.
+     */
+    previousRunIds?: string[]
 }
 
 /**
@@ -117,25 +131,37 @@ export class SessionRestoreService {
         const { live, dead } = this.readRunRegistry()
         this.liveRunIds = new Set(live)
         this.liveRunIds.add(this.currentRunId)
-        this.previousRunIds = new Set(dead)
 
         const file = this.readFile()
 
         // Tag legacy open records (no runId, written by a pre-runId version) so
         // they surface under "Previous run" rather than being force-closed.
         const hasLegacy = file.sessions.some((s) => !s.closed && !s.runId)
+        let legacyRunId: string | null = null
         if (hasLegacy) {
-            const legacyRunId = `legacy-${Date.now().toString(36)}`
-            this.previousRunIds.add(legacyRunId)
+            legacyRunId = `legacy-${Date.now().toString(36)}`
             for (const s of file.sessions) {
                 if (!s.closed && !s.runId) s.runId = legacyRunId
             }
         }
 
+        // Build the *sticky* previous-run set: runs that just exited (dead) ∪
+        // the previous-run ids we persisted on the last launch that aren't now
+        // live again. Persisting across launches is what stops a frozen/killed
+        // Tabby from eating the one-shot rotation and demoting still-open
+        // sessions to History (see SessionsFile.previousRunIds). The persisted
+        // set is pruned to non-empty runs on write below, so it stays bounded.
+        this.previousRunIds = new Set<string>(dead)
+        if (legacyRunId) this.previousRunIds.add(legacyRunId)
+        for (const id of file.previousRunIds ?? []) {
+            if (this.liveRunIds.has(id)) continue
+            this.previousRunIds.add(id)
+        }
+
         file.currentRunId = this.currentRunId
 
         // Roll into History any open record whose run is neither alive (this or
-        // another open window) nor a just-exited previous run. Records from
+        // another open window) nor in the sticky previous-run set. Records from
         // live OTHER windows are deliberately preserved here.
         for (const s of file.sessions) {
             if (s.closed) continue
@@ -152,6 +178,17 @@ export class SessionRestoreService {
             if (!cur || (s.lastSeen ?? 0) > (cur.lastSeen ?? 0)) byId.set(s.sessionId, s)
         }
         file.sessions = [...byId.values()]
+
+        // Persist the previous-run set, pruned to ids that still have an open
+        // session — so resumed/closed/expired runs drop out and the list can't
+        // grow without bound. This is the half that makes "Previous run" sticky
+        // across restarts. Keep this.previousRunIds in sync so the UI buckets
+        // (previousRunSessions()) match what we persisted.
+        const stickyPrev = [...this.previousRunIds].filter((id) =>
+            file.sessions.some((s) => !s.closed && s.runId === id),
+        )
+        file.previousRunIds = stickyPrev
+        this.previousRunIds = new Set(stickyPrev)
 
         this.writeFile(file)
     }
