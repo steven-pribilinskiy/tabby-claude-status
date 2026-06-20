@@ -15,7 +15,7 @@
 		"@hono/node-server": "^2.0.2",
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"date-fns": "^4.1.0",
-		"hono": "^4.12.2",
+		"hono": "^4.12.26",
 		"react": "^19.2.4",
 		"react-dom": "^19.2.4",
 		"react-router-dom": "^7.13.1",
