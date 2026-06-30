@@ -1339,6 +1339,29 @@ interface BackendOption {
                             <button class="btn btn-sm btn-outline-info" (click)="testSpeak(status)">Test</button>
                         </div>
                     </div>
+                    <div class="row mb-3">
+                        <div class="col-2">
+                            <label class="form-label">Permission</label>
+                        </div>
+                        <div class="col-6">
+                            <input
+                                type="text"
+                                class="form-control"
+                                [(ngModel)]="config.store.claudeStatus.audio.permissionText"
+                                (ngModelChange)="save()"
+                            />
+                        </div>
+                        <div class="col-2">
+                            <button class="btn btn-sm btn-outline-info" (click)="testSpeakPermission()">Test</button>
+                        </div>
+                        <div class="col-12">
+                            <p class="text-muted small mb-0">
+                                Spoken when Claude stops to ask permission to proceed (tool grant,
+                                plan approval). Falls back to the <em>Question</em> phrase if blank.
+                                Questionnaires (AskUserQuestion) still say <em>Question</em>.
+                            </p>
+                        </div>
+                    </div>
                 </ng-container>
                 </div><!-- /TTS mode -->
 
@@ -2832,7 +2855,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             statusLabel: 'question',
             statusColor: '#fd7e14',
             purpose:
-                'Fires when Claude needs you to approve a tool. Marks the tab as question and triggers the question phrase.',
+                'Fires when Claude stops to ask permission to proceed (tool grant, plan approval). Marks the tab as question and speaks the permission phrase — except AskUserQuestion, which speaks the question phrase. A paired Notification within ~9s is coalesced so it only speaks once.',
         },
         {
             event: 'Stop',
@@ -2919,6 +2942,10 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             this.config.store.claudeStatus.audio.statusTexts = {
                 ...DEFAULT_AUDIO_CONFIG.statusTexts,
             }
+        }
+        if (this.config.store.claudeStatus.audio.permissionText == null) {
+            this.config.store.claudeStatus.audio.permissionText =
+                DEFAULT_AUDIO_CONFIG.permissionText
         }
         if (!this.config.store.claudeStatus.audio.soundsByStatus) {
             this.config.store.claudeStatus.audio.soundsByStatus = {
@@ -3504,6 +3531,14 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     testSpeak(status: string): void {
         const audio = this.config.store.claudeStatus.audio
         const text = audio.statusTexts[status]
+        if (text) {
+            this.audioService.speakText(text, audio)
+        }
+    }
+
+    testSpeakPermission(): void {
+        const audio = this.config.store.claudeStatus.audio
+        const text = audio.permissionText || audio.statusTexts.question
         if (text) {
             this.audioService.speakText(text, audio)
         }

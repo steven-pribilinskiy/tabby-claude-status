@@ -31,6 +31,17 @@ export class AudioService {
      */
     private playGeneration = 0
 
+    /**
+     * Last wall-clock ms a 'question'-status phrase was announced, keyed by
+     * Claude session id. Used to coalesce the duplicate burst Claude Code
+     * fires for a single permission/question prompt — see `speak()`.
+     */
+    private lastQuestionAnnounceBySession: Map<string, number> = new Map()
+    /** Window within which a second 'question' event for the same session is
+     *  treated as a duplicate of the first and suppressed. The observed gap
+     *  between the PermissionRequest and its paired Notification is ~6–6.5s. */
+    private static readonly QUESTION_COALESCE_MS = 9000
+
     constructor(
         private configService: ClaudeStatusConfigService,
         private zoomState: ZoomStateService,
@@ -87,6 +98,27 @@ export class AudioService {
      * is the failure fallback for TTS so a misconfigured backend never silences
      * the plugin.
      */
+    /**
+     * True when a 'question'-status event is Claude *asking permission to
+     * proceed* — a tool-permission grant, an ExitPlanMode plan approval, or a
+     * `permission_prompt`/`confirmation` notification — as opposed to a
+     * questionnaire (`AskUserQuestion` / `ask_user`) or an idle nudge
+     * (`idle_prompt`). The authoritative signal is the `PermissionRequest`
+     * event's `tool`: every tool except `AskUserQuestion` is a permission, and
+     * `AskUserQuestion` is the questionnaire. Notification types map directly.
+     */
+    private isPermissionEvent(ctx?: {
+        metadata?: Record<string, any> | unknown
+        eventName?: string
+    }): boolean {
+        const meta = (ctx?.metadata ?? {}) as Record<string, any>
+        const type = meta.type
+        if (type === 'permission_prompt' || type === 'confirmation') return true
+        if (type === 'ask_user' || type === 'idle_prompt') return false
+        if (ctx?.eventName === 'PermissionRequest') return meta.tool !== 'AskUserQuestion'
+        return false
+    }
+
     speak(
         status: ClaudeStatusName,
         activityLogId?: string,
@@ -104,6 +136,32 @@ export class AudioService {
             return
         }
 
+        // Collapse the duplicate burst Claude Code fires for a single
+        // permission/question prompt. A permission prompt emits an immediate
+        // `PermissionRequest` (which carries the tool) followed ~6s later by a
+        // `Notification{permission_prompt}` for the same session; both map to
+        // the 'question' status, so without this the user hears the phrase
+        // twice, seconds apart. The `playGeneration` supersede below only
+        // collapses announcements that overlap in time, which these don't.
+        // Keyed per session so a genuine prompt in another tab still speaks;
+        // also catches the occasional back-to-back idle_prompt double.
+        if (status === 'question') {
+            const session = String((ctx?.metadata as any)?.session || '')
+            const now = Date.now()
+            const last = session ? this.lastQuestionAnnounceBySession.get(session) : undefined
+            if (last !== undefined && now - last < AudioService.QUESTION_COALESCE_MS) {
+                if (activityLogId) {
+                    this.activityLog.setAudioOutcome(
+                        activityLogId,
+                        'suppressed-duplicate',
+                        'coalesced question/permission burst (same session, <9s)',
+                    )
+                }
+                return
+            }
+            if (session) this.lastQuestionAnnounceBySession.set(session, now)
+        }
+
         // Supersede any in-flight announcement. Captured here (synchronously)
         // so a newer event always wins the race through the async mute/dynamic
         // pipeline below.
@@ -111,11 +169,19 @@ export class AudioService {
 
         const isSoundMode = config.mode === 'sound'
         const isDynamicMode = config.mode === 'dynamic'
+        // Permission prompts (Claude stopping to ask you to proceed) speak a
+        // distinct word from questionnaires (AskUserQuestion / ask_user) and
+        // idle nudges, even though both share the 'question' visual status.
+        // Only the spoken text differs; sound mode keeps the 'question' chime.
+        const isPermission =
+            !isSoundMode && status === 'question' && this.isPermissionEvent(ctx)
         // Static fallback payload — the dynamic path uses this if the LLM
         // call fails or is disabled for the status.
         const staticPayload = isSoundMode
             ? config.soundsByStatus[status]
-            : config.statusTexts[status]
+            : isPermission && config.permissionText
+              ? config.permissionText
+              : config.statusTexts[status]
 
         if (activityLogId) {
             this.activityLog.patchEntry(activityLogId, {

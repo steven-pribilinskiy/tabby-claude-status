@@ -159,6 +159,16 @@ export interface ClaudeStatusAudioConfig {
         idle: string
     }
     /**
+     * Spoken phrase for *permission* prompts — when Claude stops and asks to
+     * proceed: a tool-permission grant, an ExitPlanMode plan approval, or a
+     * `permission_prompt`/`confirmation` notification. Deliberately distinct
+     * from `statusTexts.question`, which now covers only questionnaires
+     * (`AskUserQuestion` / `ask_user`) and idle nudges. Both still drive the
+     * same 'question' visual surface (colour/emoji). Empty string falls back
+     * to `statusTexts.question`.
+     */
+    permissionText: string
+    /**
      * Settings for `mode === 'dynamic'`. Always present so the form binds even
      * when the user hasn't switched modes yet.
      */
@@ -245,6 +255,7 @@ export const DEFAULT_AUDIO_CONFIG: ClaudeStatusAudioConfig = {
         working: '',
         idle: 'Idle',
     },
+    permissionText: 'Permission',
     dynamic: {
         apiKey: '',
         model: 'claude-haiku-4-5',
