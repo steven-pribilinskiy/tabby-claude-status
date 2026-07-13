@@ -12,6 +12,7 @@ import { AudioService } from './services/audioService'
 import { ClaudeApiService } from './services/claudeApiService'
 import { ClaudeCredentialsService } from './services/claudeCredentialsService'
 import { ClaudeStatusConfigService } from './services/configService'
+import { ClaudeCrashLogService } from './services/crashLogService'
 import { MicStateService } from './services/micStateService'
 import { PiperInstallerService } from './services/piperInstallerService'
 import { SessionRestoreService } from './services/sessionRestoreService'
@@ -32,6 +33,7 @@ import { ZoomStateService } from './services/zoomStateService'
         MicStateService,
         SoundService,
         StatusActivityLogService,
+        ClaudeCrashLogService,
         ClaudeApiService,
         ClaudeCredentialsService,
         TranscriptReaderService,

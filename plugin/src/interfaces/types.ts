@@ -362,7 +362,11 @@ export interface ClaudeSessionRestoreConfig {
     enabled: boolean
     /** Auto-open saved sessions when the plugin first loads (i.e. Tabby launch). */
     autoResumeOnLaunch: boolean
-    /** Sessions older than this are pruned and excluded from auto-resume. */
+    /**
+     * How many *active days* (days on which Claude activity was observed) a
+     * closed session is kept before being pruned. Idle/away days don't count,
+     * so a break never ages sessions out. Open sessions are never time-pruned.
+     */
     retentionDays: number
     /** Extra flags appended after `claude --resume <id>` (e.g. `--model opus`). */
     extraArgs: string

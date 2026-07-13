@@ -27,9 +27,27 @@ const SESSIONS_FILE = path.join(TABBY_DATA_DIR, 'tabby-claude-status-sessions.js
  */
 const RUNS_DIR = path.join(TABBY_DATA_DIR, 'tabby-claude-runs')
 
+/**
+ * How long to coalesce session-file writes. `record()` fires on every Claude
+ * hook event — often several per second across many concurrent sessions — and
+ * each write is a full-file serialise + atomic rename on the renderer thread.
+ * Debouncing turns a burst into a single write. Kept short so a normal quit or
+ * the 5s UI refresh still sees fresh data; a clean shutdown flushes synchronously
+ * regardless (see `flush()` / the decorator's `beforeunload`).
+ */
+const WRITE_DEBOUNCE_MS = 400
+
 interface SessionsFile {
     version: 1
     sessions: ClaudeSessionRecord[]
+    /**
+     * Local day-keys (`YYYY-MM-DD`) on which the plugin observed activity.
+     * Retention is measured in these *active* days rather than wall-clock days,
+     * so an idle stretch (Tabby closed, e.g. a vacation) never ages sessions
+     * out — only days you actually used Claude count against the window. Sorted
+     * ascending, de-duplicated, and bounded on write.
+     */
+    activeDays?: string[]
     /** Run id of the currently-active Tabby instance. Informational only now;
      *  liveness is tracked via the RUNS_DIR registry, not this field. */
     currentRunId?: string
@@ -95,6 +113,16 @@ export class SessionRestoreService {
     private previousRunIds: Set<string> = new Set()
     private migrated = false
 
+    /**
+     * In-memory authoritative copy of the sessions file while a debounced write
+     * is pending. Once a mutation is queued, this — not the disk — is this
+     * process's source of truth (so a rapid follow-up mutation doesn't read a
+     * stale disk snapshot that's missing the previous, not-yet-flushed change).
+     * Reset to null once flushed.
+     */
+    private pending: SessionsFile | null = null
+    private flushHandle: ReturnType<typeof setTimeout> | null = null
+
     constructor(
         private configService: ClaudeStatusConfigService,
         @Optional() @Inject(TerminalService) private terminalService: TerminalService | null,
@@ -108,6 +136,28 @@ export class SessionRestoreService {
 
     private static makeRunId(): string {
         return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+    }
+
+    /** Local calendar day-key (`YYYY-MM-DD`) for a timestamp. Local time, not
+     *  UTC, so "today" matches the user's wall clock. */
+    private static dayKey(ts: number): string {
+        const d = new Date(ts)
+        const m = `${d.getMonth() + 1}`.padStart(2, '0')
+        const day = `${d.getDate()}`.padStart(2, '0')
+        return `${d.getFullYear()}-${m}-${day}`
+    }
+
+    /** Record today as an active day on `file` (dedup, sorted, bounded). Called
+     *  from `record()` so only genuine session activity marks a day active. */
+    private noteActiveDay(file: SessionsFile, retentionDays: number): void {
+        const today = SessionRestoreService.dayKey(Date.now())
+        const days = new Set(file.activeDays ?? [])
+        days.add(today)
+        const sorted = [...days].sort()
+        // Bound the list so it can't grow forever; keep well more than the
+        // retention window so the active-day cutoff is always computable.
+        const cap = Math.max((retentionDays || 7) * 4, 60)
+        file.activeDays = sorted.length > cap ? sorted.slice(sorted.length - cap) : sorted
     }
 
     /**
@@ -190,7 +240,17 @@ export class SessionRestoreService {
         file.previousRunIds = stickyPrev
         this.previousRunIds = new Set(stickyPrev)
 
-        this.writeFile(file)
+        // Write synchronously — startup state must be durable before we touch
+        // the registry dir below.
+        this.writeFileAtomic(file)
+
+        // ONLY NOW is it safe to prune the registry dir. Deleting a dead run's
+        // file is the irreversible step that "consumes" its previous-run
+        // identity; doing it after the durable write (and only for runs with no
+        // open session left to protect) means a crash at any earlier point just
+        // re-classifies the same dead run idempotently on the next launch,
+        // instead of losing its still-open sessions to History.
+        this.cleanupDeadRuns(dead, file)
     }
 
     /** Write this window's run-registry file (PID + start time), atomically. */
@@ -208,9 +268,14 @@ export class SessionRestoreService {
 
     /**
      * Read the run registry, partitioning other windows' runs into still-alive
-     * (PID running) and exited. Exited runs' files are deleted here so they're
-     * classified "previous run" exactly once — on the next launch they're gone
-     * and their sessions roll to History.
+     * (PID running) and exited (`dead`).
+     *
+     * Side-effect-free by design: it does NOT delete anything. Deletion of dead
+     * runs' files is deferred to `cleanupDeadRuns()`, called at the very end of
+     * `migrateIfNeeded()` after the sessions file is durably written — see the
+     * comment there. Because a dead PID stays dead, re-reading and re-classifying
+     * the same run on a later launch is deterministic, so a crash before cleanup
+     * is harmless (the run is simply re-classified as "previous run" again).
      */
     private readRunRegistry(): { live: string[]; dead: string[] } {
         const live: string[] = []
@@ -223,6 +288,10 @@ export class SessionRestoreService {
         }
         for (const name of names) {
             if (!name.endsWith('.json')) continue
+            // Skip an in-flight atomic-write temp file from a concurrently
+            // starting window (`<runId>.json.tmp-<pid>`) so it's never
+            // misclassified as a dead run.
+            if (name.includes('.tmp-')) continue
             const runId = name.slice(0, -'.json'.length)
             if (runId === this.currentRunId) continue // our own run — alive
             const full = path.join(RUNS_DIR, name)
@@ -231,20 +300,39 @@ export class SessionRestoreService {
                 const data = JSON.parse(fs.readFileSync(full, 'utf-8'))
                 pid = typeof data?.pid === 'number' ? data.pid : 0
             } catch {
-                /* unreadable — treat as dead below */
+                /* unreadable — treat as dead */
             }
             if (pid && this.isPidAlive(pid)) {
                 live.push(runId)
             } else {
                 dead.push(runId)
-                try {
-                    fs.unlinkSync(full)
-                } catch {
-                    /* already gone */
-                }
             }
         }
         return { live, dead }
+    }
+
+    /**
+     * Delete registry files for dead runs that have no open (`closed:false`)
+     * session left to protect in the just-persisted file. Called at the END of
+     * `migrateIfNeeded()`, strictly after the durable write — so a dead run's
+     * file is never removed before its "previous run" state is persisted.
+     *
+     * While a dead run still owns an open session, its file is kept as the
+     * durable anchor that lets the next launch re-classify it as dead and keep
+     * those sessions under "Previous run" across repeated crashes. Once those
+     * sessions are resumed/closed/retention-pruned, the file is swept here so
+     * RUNS_DIR stays bounded.
+     */
+    private cleanupDeadRuns(dead: string[], persisted: SessionsFile): void {
+        for (const runId of dead) {
+            const stillProtecting = persisted.sessions.some((s) => !s.closed && s.runId === runId)
+            if (stillProtecting) continue
+            try {
+                fs.unlinkSync(path.join(RUNS_DIR, `${runId}.json`))
+            } catch {
+                /* already gone / never existed — fine */
+            }
+        }
     }
 
     /** True if a process with this PID is currently running. */
@@ -313,7 +401,7 @@ export class SessionRestoreService {
         const cfg = this.configService.getSessionRestoreConfig()
         if (!cfg.enabled) return
 
-        const file = this.readFile()
+        const file = this.currentState()
         const now = Date.now()
         const existing = file.sessions.find((s) => s.sessionId === sessionId)
         if (existing) {
@@ -341,8 +429,11 @@ export class SessionRestoreService {
                 runId: this.currentRunId,
             })
         }
+        // Mark today active *before* pruning so retention is measured against a
+        // day-list that includes today.
+        this.noteActiveDay(file, cfg.retentionDays)
         this.pruneInPlace(file, cfg.retentionDays)
-        this.writeFile(file)
+        this.queueWrite(file)
     }
 
     /**
@@ -354,13 +445,14 @@ export class SessionRestoreService {
      */
     markClosed(sessionId: string): void {
         if (!sessionId) return
-        const file = this.readFile()
+        const file = this.currentState()
         const existing = file.sessions.find((s) => s.sessionId === sessionId)
         if (!existing) return
         if (existing.closed === true) return
         existing.closed = true
         existing.lastSeen = Date.now()
-        this.writeFile(file)
+        this.queueWrite(file)
+        this.flush()
     }
 
     /**
@@ -370,7 +462,7 @@ export class SessionRestoreService {
      * clean slate.
      */
     markAllClosed(): number {
-        const file = this.readFile()
+        const file = this.currentState()
         let n = 0
         for (const s of file.sessions) {
             if (!s.closed) {
@@ -378,7 +470,10 @@ export class SessionRestoreService {
                 n++
             }
         }
-        if (n > 0) this.writeFile(file)
+        if (n > 0) {
+            this.queueWrite(file)
+            this.flush()
+        }
         return n
     }
 
@@ -393,7 +488,7 @@ export class SessionRestoreService {
      */
     list(): ClaudeSessionRecord[] {
         const cfg = this.configService.getSessionRestoreConfig()
-        const file = this.readFile()
+        const file = this.currentState()
         // Persist the prune too — otherwise a list() that only removed expired
         // records (no title/profile change) returned the pruned array but left
         // the stale records on disk, so they reappeared on the next read and
@@ -414,7 +509,7 @@ export class SessionRestoreService {
                 dirty = true
             }
         }
-        if (dirty) this.writeFile(file)
+        if (dirty) this.queueWrite(file)
         return [...file.sessions].sort((a, b) => b.lastSeen - a.lastSeen)
     }
 
@@ -422,9 +517,18 @@ export class SessionRestoreService {
      * Delete a session from the sidecar file (e.g. user dismissed it from the UI).
      */
     forget(sessionId: string): void {
-        const file = this.readFile()
+        // A deletion must not be undone by the flush-time union-merge (which
+        // would re-add the session from disk), so commit it synchronously and
+        // authoritatively: cancel any pending debounced write, apply the delete
+        // to the current state, and write it straight to disk.
+        if (this.flushHandle) {
+            clearTimeout(this.flushHandle)
+            this.flushHandle = null
+        }
+        const file = this.currentState()
         file.sessions = file.sessions.filter((s) => s.sessionId !== sessionId)
-        this.writeFile(file)
+        this.pending = null
+        this.writeFileAtomic(file)
     }
 
     /**
@@ -730,7 +834,75 @@ export class SessionRestoreService {
         }
     }
 
-    private writeFile(file: SessionsFile): void {
+    /**
+     * Working copy for the current mutation: the in-memory pending file if a
+     * debounced write is queued, else a fresh disk read. The returned object is
+     * safe to mutate in place — `pending` is owned by us, and a disk read is a
+     * fresh parse.
+     */
+    private currentState(): SessionsFile {
+        return this.pending ?? this.readFile()
+    }
+
+    /** Stage `file` as this process's authoritative state and schedule a
+     *  debounced flush. Coalesces a burst of hook events into one disk write. */
+    private queueWrite(file: SessionsFile): void {
+        this.pending = file
+        if (!this.flushHandle) {
+            this.flushHandle = setTimeout(() => this.flush(), WRITE_DEBOUNCE_MS)
+        }
+    }
+
+    /**
+     * Write any pending state to disk now, merging in concurrent changes from
+     * other Tabby windows so the debounce window can't drop their updates. A
+     * no-op when nothing is pending. Called on the debounce timer, after
+     * markClosed/markAllClosed, and synchronously on Tabby shutdown (`beforeunload`).
+     */
+    flush(): void {
+        if (this.flushHandle) {
+            clearTimeout(this.flushHandle)
+            this.flushHandle = null
+        }
+        const mem = this.pending
+        if (!mem) return
+        this.pending = null
+        const disk = this.readFile()
+        this.writeFileAtomic(this.mergeFiles(disk, mem))
+    }
+
+    /**
+     * Merge the on-disk file (which may carry another window's concurrent
+     * writes) with this process's in-memory `mem`. Sessions are unioned by
+     * sessionId keeping the most-recently-seen record — `mem` wins ties since it
+     * holds this process's latest intent (e.g. a just-set `closed` flag).
+     * `previousRunIds` and `activeDays` are unioned; `mem` owns `currentRunId`.
+     */
+    private mergeFiles(disk: SessionsFile, mem: SessionsFile): SessionsFile {
+        const byId = new Map<string, ClaudeSessionRecord>()
+        for (const s of disk.sessions) byId.set(s.sessionId, s)
+        for (const s of mem.sessions) {
+            const cur = byId.get(s.sessionId)
+            if (!cur || (s.lastSeen ?? 0) >= (cur.lastSeen ?? 0)) byId.set(s.sessionId, s)
+        }
+        const prevIds = new Set<string>([
+            ...(disk.previousRunIds ?? []),
+            ...(mem.previousRunIds ?? []),
+        ])
+        const days = [
+            ...new Set<string>([...(disk.activeDays ?? []), ...(mem.activeDays ?? [])]),
+        ].sort()
+        return {
+            version: 1,
+            sessions: [...byId.values()],
+            currentRunId: mem.currentRunId,
+            previousRunId: mem.previousRunId ?? disk.previousRunId,
+            previousRunIds: [...prevIds],
+            activeDays: days,
+        }
+    }
+
+    private writeFileAtomic(file: SessionsFile): void {
         try {
             fs.mkdirSync(path.dirname(SESSIONS_FILE), { recursive: true })
             // Atomic write: serialise to a temp file then rename over the
@@ -748,22 +920,57 @@ export class SessionRestoreService {
         }
     }
 
-    /** Drop records older than the retention window. Returns true if anything
-     *  was removed so callers can persist the change. */
+    /**
+     * Drop sessions that have aged out of the retention window, measured in
+     * *active days* (days on which activity was observed) rather than wall-clock
+     * days — so an idle stretch (Tabby closed over a vacation) never prunes
+     * anything: only days you actually used Claude count against the window.
+     *
+     * Only closed (historical) sessions are eligible. Open sessions are never
+     * time-pruned; they leave the list by being closed, resumed, or rolled to
+     * History on restart. This double-protects the case that motivated the
+     * change — an open session left running over a long break.
+     *
+     * Returns true if anything was removed so callers persist the change.
+     */
     private pruneInPlace(file: SessionsFile, retentionDays: number): boolean {
         if (!retentionDays || retentionDays <= 0) return false
-        const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
+
+        // The active-day list to measure against. On a fresh upgrade (no list
+        // yet) seed it from existing sessions' lastSeen days plus today, so we
+        // have a sensible basis and don't prune everything at once.
+        let days = file.activeDays?.length ? file.activeDays : []
+        if (days.length === 0) {
+            const seed = new Set<string>()
+            for (const s of file.sessions) {
+                const seen =
+                    typeof s.lastSeen === 'number' && Number.isFinite(s.lastSeen)
+                        ? s.lastSeen
+                        : (s.firstSeen ?? Date.now())
+                seed.add(SessionRestoreService.dayKey(seen))
+            }
+            seed.add(SessionRestoreService.dayKey(Date.now()))
+            days = [...seed].sort()
+            file.activeDays = days
+        }
+
+        // Need more than `retentionDays` distinct active days before anything
+        // can age out; until then keep everything (conservative).
+        if (days.length <= retentionDays) return false
+
+        // cutoffDay = the oldest of the most-recent `retentionDays` active days.
+        // Day-keys are fixed-width `YYYY-MM-DD`, so lexical order == chronology.
+        // A closed session is pruned iff its lastSeen day is strictly older.
+        const cutoffDay = days[days.length - retentionDays]
+
         const before = file.sessions.length
         file.sessions = file.sessions.filter((s) => {
-            // Treat a missing/NaN lastSeen as "recently seen" rather than
-            // pruning it: `undefined >= cutoff` is false, which would silently
-            // delete a record (possibly an active session) whose lastSeen got
-            // corrupted or was never set. Fall back to firstSeen, then now.
+            if (!s.closed) return true // open sessions are never time-pruned
             const seen =
                 typeof s.lastSeen === 'number' && Number.isFinite(s.lastSeen)
                     ? s.lastSeen
                     : (s.firstSeen ?? Date.now())
-            return seen >= cutoff
+            return SessionRestoreService.dayKey(seen) >= cutoffDay
         })
         return file.sessions.length !== before
     }

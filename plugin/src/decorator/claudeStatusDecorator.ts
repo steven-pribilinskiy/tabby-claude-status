@@ -12,6 +12,7 @@ import {
 } from '../interfaces/types'
 import { AudioService } from '../services/audioService'
 import { ClaudeStatusConfigService } from '../services/configService'
+import { ClaudeCrashLogService } from '../services/crashLogService'
 import { SessionRestoreService } from '../services/sessionRestoreService'
 import { StatusActivityLogService } from '../services/statusActivityLogService'
 import { StatusParserService } from '../services/statusParserService'
@@ -99,9 +100,15 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         private sessionRestore: SessionRestoreService,
         private activityLog: StatusActivityLogService,
         private app: AppService,
+        private crashLog: ClaudeCrashLogService,
     ) {
         super()
         this.configService.debug('ClaudeStatusDecorator initialized')
+
+        // Capture renderer errors/rejections to a persistent log so a future
+        // Tabby crash is diagnosable (Tabby's own log.txt is main-process only,
+        // and a renderer error leaves no Crashpad dump). Idempotent.
+        this.crashLog.install()
 
         // Resolve live tab titles for the settings tab. We own the
         // session→terminal mapping, so we plug a getter into SessionRestore
@@ -155,6 +162,16 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 'beforeunload',
                 () => {
                     this.isShuttingDown = true
+                    // Persist any debounced session-file write synchronously
+                    // before the renderer is torn down, so a clean quit never
+                    // loses the last few observations sitting in the coalescing
+                    // buffer. (A crash is covered separately: migrateIfNeeded
+                    // keeps still-open sessions under "Previous run".)
+                    try {
+                        this.sessionRestore.flush()
+                    } catch {
+                        /* shutdown best-effort */
+                    }
                 },
                 { capture: true },
             )

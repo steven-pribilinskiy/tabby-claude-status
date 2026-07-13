@@ -1970,7 +1970,7 @@ interface BackendOption {
                     <div *ngIf="historyExpanded" class="claude-accordion-body">
                         <div class="row mb-2">
                             <div class="col-6 col-md-4">
-                                <label class="form-label small">Retention (days)</label>
+                                <label class="form-label small">Retention (active days)</label>
                                 <input
                                     type="number"
                                     class="form-control form-control-sm"
@@ -1979,7 +1979,11 @@ interface BackendOption {
                                     (ngModelChange)="save()"
                                 />
                                 <div class="form-text small">
-                                    Historical (closed) sessions older than this are pruned.
+                                    Historical (closed) sessions are pruned after this many
+                                    <em>active</em> days. Idle/away days (Tabby closed or no
+                                    Claude activity) don't count, so a break — a weekend, a
+                                    vacation — never ages your sessions out. Open sessions are
+                                    never time-pruned.
                                 </div>
                             </div>
                         </div>
