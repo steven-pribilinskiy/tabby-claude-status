@@ -16,6 +16,7 @@ import { ClaudeCrashLogService } from '../services/crashLogService'
 import { SessionRestoreService } from '../services/sessionRestoreService'
 import { StatusActivityLogService } from '../services/statusActivityLogService'
 import { StatusParserService } from '../services/statusParserService'
+import { WindowCoordinatorService } from '../services/windowCoordinatorService'
 
 /**
  * Spool directory for status events. hook.js drops one file per event here
@@ -73,6 +74,11 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
     private recentEventSigs: Set<string> = new Set()
     private recentEventOrder: string[] = []
     private static readonly MAX_RECENT_SIGS = 50
+    /** How long a window waits before announcing an event it couldn't match,
+     *  giving the window that *can* match it time to publish its claim. Long
+     *  enough to cover a synchronous claim write plus FS latency, short enough
+     *  that a genuinely ownerless announcement still feels immediate. */
+    private static readonly PEER_CLAIM_GRACE_MS = 350
     /** Spool filenames currently being read, so overlapping watch fires don't
      *  double-process the same event before it's deleted. */
     private processingFiles: Set<string> = new Set()
@@ -101,9 +107,15 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         private activityLog: StatusActivityLogService,
         private app: AppService,
         private crashLog: ClaudeCrashLogService,
+        private windowCoordinator: WindowCoordinatorService,
     ) {
         super()
         this.configService.debug('ClaudeStatusDecorator initialized')
+
+        // Announce this window to its siblings. Every Tabby window watches the
+        // same hook spool dir, so without this each one announces every event
+        // and the user hears N copies with N windows open.
+        this.windowCoordinator.start()
 
         // Capture renderer errors/rejections to a persistent log so a future
         // Tabby crash is diagnosable (Tabby's own log.txt is main-process only,
@@ -172,6 +184,14 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                     } catch {
                         /* shutdown best-effort */
                     }
+                    // Drop our claim file immediately so a sibling window
+                    // doesn't wait out the staleness window before taking
+                    // over the ownerless-event announcements.
+                    try {
+                        this.windowCoordinator.stop()
+                    } catch {
+                        /* shutdown best-effort */
+                    }
                 },
                 { capture: true },
             )
@@ -208,6 +228,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         this.terminalPids.delete(terminal)
         this.terminalCwds.delete(terminal)
         this.terminals.delete(terminal)
+        this.publishOwnedPids()
 
         // Push any Claude sessions that were running in this tab into the
         // closed/history bucket — UNLESS Tabby itself is shutting down
@@ -221,6 +242,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         for (const [session, t] of this.sessionTerminals) {
             if (t === terminal) {
                 this.sessionTerminals.delete(session)
+                this.windowCoordinator.releaseSession(session)
                 if (this.isShuttingDown) continue
                 try {
                     this.sessionRestore.markClosed(session)
@@ -245,6 +267,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 const pid = await (terminal as any).session?.pty?.getPID?.()
                 if (pid) {
                     this.terminalPids.set(terminal, pid)
+                    this.publishOwnedPids()
                     this.configService.debug('Cached terminal PID:', pid)
                     return
                 }
@@ -423,30 +446,91 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                 this.handleStatusEvent(terminal, event, 'hook-file')
             } else {
                 // Claude fired from a non-Tabby terminal (VS Code, Windows
-                // Terminal, plain pwsh…). Don't fan per-tab decorations out
-                // to unrelated Tabby tabs — that just lights up every tab in
-                // red/green for a session that has nothing to do with them.
-                // Still emit the global effects (audio + taskbar) so the
-                // user hears "I'm Done" etc. regardless of host terminal.
-                this.applyTaskbar(event.status, this.configService.getDisplayConfig())
-                const logId = this.activityLog.record({
-                    status: event.status,
-                    eventName: event.eventName,
-                    source: 'hook-file',
-                    terminalMatched: false,
-                    session: data.session,
-                    metadata: this.summarizeMetadata(data),
-                })
-                // Pass the full payload (not the trimmed summary) as ctx so
-                // the dynamic-phrase pipeline can read transcript_path. The
-                // call is fire-and-forget — speak() returns void.
-                this.audioService.speak(event.status, logId, {
-                    metadata: data,
-                    eventName: event.eventName,
-                })
+                // Terminal, plain pwsh…) — OR from a tab in a *different*
+                // Tabby window. Don't fan per-tab decorations out to unrelated
+                // Tabby tabs — that just lights up every tab in red/green for a
+                // session that has nothing to do with them. Still emit the
+                // global effects (audio + taskbar) so the user hears "I'm Done"
+                // etc. regardless of host terminal — but only from one window,
+                // see `runGlobalEffects`.
+                this.runGlobalEffects(event, data)
             }
         } catch (_) {
             // Defensive: a malformed payload shouldn't break the watcher.
+        }
+    }
+
+    // ── Cross-window arbitration ──────────────────────────────────
+
+    /** Map a session to one of our tabs and tell sibling windows we own it, so
+     *  they skip the ownerless-event path for it instead of announcing too. */
+    private claimSessionForTerminal(session: string, terminal: BaseTerminalTabComponent): void {
+        this.sessionTerminals.set(session, terminal)
+        this.windowCoordinator.claimSession(session)
+    }
+
+    private publishOwnedPids(): void {
+        this.windowCoordinator.setPids(Array.from(this.terminalPids.values()))
+    }
+
+    /**
+     * Global (non-tab-scoped) effects for an event we couldn't match to a tab
+     * in this window: taskbar flash + the spoken announcement.
+     *
+     * Every open Tabby window watches the same hook spool dir and reaches this
+     * point for the same event, so running it unconditionally means N windows
+     * → N utterances. Two gates fix that:
+     *
+     *  - If a sibling window owns the session (or hosts a terminal in the
+     *    event's process ancestry), it is announcing this event from its own
+     *    matched-terminal path. Stay silent.
+     *  - Otherwise nobody owns it (Claude running outside Tabby entirely).
+     *    Exactly one window — the coordinator's leader — announces.
+     *
+     * The ownership check runs twice: once immediately (cheap, catches the
+     * steady state via published PIDs) and once after a short grace period.
+     * The grace matters for the *first* event of a session, where the owning
+     * window only learns the session→tab mapping while processing that very
+     * event; its claim lands within a few ms, well inside the window below.
+     * WSL sessions match by cwd rather than PID and depend on this entirely.
+     */
+    private runGlobalEffects(event: ClaudeStatusEvent, data: any): void {
+        if (this.isClaimedByPeerWindow(data)) return
+        setTimeout(() => {
+            if (this.isClaimedByPeerWindow(data)) {
+                this.configService.debug('Global event claimed by another window — skipping')
+                return
+            }
+            if (!this.windowCoordinator.isLeader()) {
+                this.configService.debug('Global event: not the leader window — skipping')
+                return
+            }
+            this.applyTaskbar(event.status, this.configService.getDisplayConfig())
+            const logId = this.activityLog.record({
+                status: event.status,
+                eventName: event.eventName,
+                source: 'hook-file',
+                terminalMatched: false,
+                session: data.session,
+                metadata: this.summarizeMetadata(data),
+            })
+            // Pass the full payload (not the trimmed summary) as ctx so the
+            // dynamic-phrase pipeline can read transcript_path. The call is
+            // fire-and-forget — speak() returns void.
+            this.audioService.speak(event.status, logId, {
+                metadata: data,
+                eventName: event.eventName,
+            })
+        }, ClaudeStatusDecorator.PEER_CLAIM_GRACE_MS)
+    }
+
+    private isClaimedByPeerWindow(data: any): boolean {
+        try {
+            return this.windowCoordinator.isClaimedByPeer(data?.session, data?.ancestors)
+        } catch {
+            // Coordination is best-effort: if the temp dir is unreadable, fall
+            // back to the old behaviour (announce) rather than going silent.
+            return false
         }
     }
 
@@ -471,7 +555,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             )
             for (const [terminal, cachedPid] of this.terminalPids) {
                 if (ancestors.includes(cachedPid)) {
-                    if (session) this.sessionTerminals.set(session, terminal)
+                    if (session) this.claimSessionForTerminal(session, terminal)
                     this.configService.debug('PID match: MATCHED terminal PID', cachedPid)
                     return terminal
                 }
@@ -503,7 +587,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             // the global path rather than decorate the wrong tab.
             if (matches.length === 1) {
                 const terminal = matches[0]
-                if (session) this.sessionTerminals.set(session, terminal)
+                if (session) this.claimSessionForTerminal(session, terminal)
                 this.configService.debug('cwd match: MATCHED terminal for cwd', eventCwd)
                 return terminal
             }

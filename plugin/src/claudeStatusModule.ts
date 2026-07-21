@@ -20,6 +20,7 @@ import { SoundService } from './services/soundService'
 import { StatusActivityLogService } from './services/statusActivityLogService'
 import { StatusParserService } from './services/statusParserService'
 import { TranscriptReaderService } from './services/transcriptReaderService'
+import { WindowCoordinatorService } from './services/windowCoordinatorService'
 import { ZoomStateService } from './services/zoomStateService'
 
 @NgModule({
@@ -39,6 +40,7 @@ import { ZoomStateService } from './services/zoomStateService'
         TranscriptReaderService,
         PiperInstallerService,
         SessionRestoreService,
+        WindowCoordinatorService,
         { provide: ConfigProvider, useClass: ClaudeStatusConfigProvider, multi: true },
         { provide: TerminalDecorator, useClass: ClaudeStatusDecorator, multi: true },
         { provide: SettingsTabProvider, useClass: ClaudeStatusSettingsTabProvider, multi: true },
