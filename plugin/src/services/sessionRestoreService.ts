@@ -396,16 +396,33 @@ export class SessionRestoreService {
      * `closed`) — Claude Code reuses session ids across `--resume` so the
      * same id can cycle between open and closed.
      */
-    record(sessionId: string, cwd: string, title?: string, profile?: any): void {
+    record(
+        sessionId: string,
+        cwd: string,
+        title?: string,
+        profile?: any,
+        meta?: { transcriptPath?: string; eventName?: string },
+    ): void {
         if (!sessionId || !cwd) return
         const cfg = this.configService.getSessionRestoreConfig()
         if (!cfg.enabled) return
 
         const file = this.currentState()
         const now = Date.now()
+        const launch = this.resolveLaunchCwd(cwd, meta?.transcriptPath)
         const existing = file.sessions.find((s) => s.sessionId === sessionId)
         if (existing) {
-            existing.cwd = cwd
+            // Only let `cwd` move when the new value is actually better.
+            // A verified value (cross-checked against transcript_path) always
+            // wins; failing that, SessionStart fires before the agent can `cd`
+            // anywhere, so its cwd is the launch dir by definition. Anything
+            // else is a mid-session shell cwd and must not clobber what we
+            // have — that's what wrote `…\app\src\server` over
+            // `C:\Users\steve\projects` and broke resume.
+            if (launch.verified || (!existing.cwdVerified && meta?.eventName === 'SessionStart')) {
+                existing.cwd = launch.cwd
+                existing.cwdVerified = launch.verified
+            }
             if (title) existing.title = title
             if (profile?.id) {
                 existing.profileId = profile.id
@@ -418,7 +435,8 @@ export class SessionRestoreService {
         } else {
             file.sessions.push({
                 sessionId,
-                cwd,
+                cwd: launch.cwd,
+                cwdVerified: launch.verified,
                 title,
                 profileId: profile?.id,
                 profileName: profile?.name,
@@ -434,6 +452,54 @@ export class SessionRestoreService {
         this.noteActiveDay(file, cfg.retentionDays)
         this.pruneInPlace(file, cfg.retentionDays)
         this.queueWrite(file)
+    }
+
+    /**
+     * Work out the directory `claude --resume <id>` has to run from.
+     *
+     * Claude Code stores each session at
+     * `~/.claude/projects/<encoded-launch-cwd>/<sessionId>.jsonl` and looks it
+     * up by re-encoding the cwd it is started in. The hook payload's `cwd`,
+     * though, is the session's *live* shell cwd, which moves every time the
+     * agent runs `cd` through the Bash tool — so it frequently points at some
+     * subdirectory that encodes to a different (non-existent) project folder.
+     *
+     * `transcript_path` is the authoritative signal: its parent folder IS the
+     * encoded launch cwd. The encoding is lossy (`.` and the separators all
+     * collapse to `-`), so we can't decode it back — instead we test
+     * candidates. The live cwd is checked first, then each of its ancestors,
+     * which recovers the launch dir in the usual case where the agent only
+     * ever descended into subfolders of it.
+     */
+    private resolveLaunchCwd(
+        cwd: string,
+        transcriptPath?: string,
+    ): { cwd: string; verified: boolean } {
+        const projectDir = transcriptPath ? path.basename(path.dirname(transcriptPath)) : ''
+        if (!projectDir) return { cwd, verified: false }
+
+        let candidate = cwd
+        // Bounded walk: no real path is 64 levels deep, and `path.dirname`
+        // becomes a fixed point at the root, so this also can't spin.
+        for (let i = 0; i < 64; i++) {
+            if (this.encodeProjectDir(candidate) === projectDir) {
+                return { cwd: candidate, verified: true }
+            }
+            const parent = path.dirname(candidate)
+            if (!parent || parent === candidate) break
+            candidate = parent
+        }
+        return { cwd, verified: false }
+    }
+
+    /**
+     * Mirror of Claude Code's project-folder encoding: every path separator,
+     * drive colon and dot becomes `-`. `C:\Users\steve\projects` →
+     * `C--Users-steve-projects`; `\\wsl.localhost\Ubuntu\home\stevenp` →
+     * `--wsl-localhost-Ubuntu-home-stevenp`. Case is preserved.
+     */
+    private encodeProjectDir(cwd: string): string {
+        return cwd.replace(/[\\/:.]/g, '-')
     }
 
     /**

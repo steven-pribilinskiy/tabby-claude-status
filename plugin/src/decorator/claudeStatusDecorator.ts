@@ -436,7 +436,10 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                     const terminal = this.findTerminalForEvent(data)
                     const title = terminal ? (terminal as any).title : undefined
                     const profile = terminal ? (terminal as any).profile : undefined
-                    this.sessionRestore.record(data.session, data.cwd, title, profile)
+                    this.sessionRestore.record(data.session, data.cwd, title, profile, {
+                        transcriptPath: data.transcript_path,
+                        eventName: data.event,
+                    })
                 }
             }
 

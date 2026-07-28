@@ -319,7 +319,21 @@ export const DEFAULT_DISPLAY_CONFIG: ClaudeStatusDisplayConfig = {
  */
 export interface ClaudeSessionRecord {
     sessionId: string
+    /**
+     * Directory Claude Code was *launched* from — not wherever its shell
+     * happens to be now. `claude --resume <id>` only finds a session from the
+     * launch dir, because Claude derives the transcript's project folder by
+     * encoding that path. The hook payload's `cwd`, by contrast, follows every
+     * `cd` the agent makes via the Bash tool, so it drifts mid-session.
+     */
     cwd: string
+    /**
+     * True once `cwd` has been confirmed against the session's
+     * `transcript_path` (its encoded project folder). Unverified values are
+     * best-effort and get replaced as soon as a verified one turns up;
+     * verified values are never overwritten by a drifted `cwd`.
+     */
+    cwdVerified?: boolean
     title?: string
     /**
      * Tabby profile that owned the original tab — id is the persistent
