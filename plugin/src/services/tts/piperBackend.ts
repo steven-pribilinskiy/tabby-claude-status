@@ -29,6 +29,8 @@ export class PiperBackend implements TtsBackend {
     private exePath = ''
     private modelPath = ''
     private currentAudio: HTMLAudioElement | null = null
+    /** Object URL backing `currentAudio`, so `cancel()` can release it. */
+    private currentAudioUrl: string | null = null
 
     configure(exePath: string, modelPath: string): void {
         this.exePath = exePath
@@ -137,6 +139,7 @@ export class PiperBackend implements TtsBackend {
         audio.volume = params.volume
         audio.playbackRate = Math.max(0.5, Math.min(4, params.rate))
         this.currentAudio = audio
+        this.currentAudioUrl = url
         audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true })
         audio.addEventListener('error', () => URL.revokeObjectURL(url), { once: true })
         await audio.play()
@@ -147,6 +150,13 @@ export class PiperBackend implements TtsBackend {
             this.currentAudio.pause()
             this.currentAudio.src = ''
             this.currentAudio = null
+        }
+        // Explicit release — see the matching note in EdgeTtsBackend.cancel().
+        // Piper WAVs are larger than Edge's MP3s, so a missed revoke here pins
+        // proportionally more memory per superseded utterance.
+        if (this.currentAudioUrl) {
+            URL.revokeObjectURL(this.currentAudioUrl)
+            this.currentAudioUrl = null
         }
     }
 }

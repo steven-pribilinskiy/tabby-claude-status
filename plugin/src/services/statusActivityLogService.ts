@@ -1,4 +1,5 @@
 import * as fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { Injectable } from '@angular/core'
@@ -72,6 +73,10 @@ export class StatusActivityLogService {
     private entries: ActivityLogEntry[] = []
     private listeners: Set<() => void> = new Set()
     private flushHandle: ReturnType<typeof setTimeout> | null = null
+    /** True while an async flush is in flight — see `flushNow()`. */
+    private flushing = false
+    /** Set when state changed during an in-flight flush, so we write once more. */
+    private flushAgain = false
     private nextSeq = 1
     private readonly runPrefix = Math.random().toString(36).slice(2, 8)
 
@@ -160,26 +165,55 @@ export class StatusActivityLogService {
         if (this.flushHandle) return
         this.flushHandle = setTimeout(() => {
             this.flushHandle = null
-            try {
-                // Atomic write so a concurrent reader (e.g. the settings tab's
-                // loadFromDisk on open) never parses a half-written log and
-                // throws it all away as corrupt.
-                const payload = JSON.stringify(
-                    {
-                        version: 1,
-                        updated: Date.now(),
-                        entries: this.entries,
-                    },
-                    null,
-                    2,
-                )
-                const tmp = `${ACTIVITY_LOG_FILE}.tmp-${process.pid}`
-                fs.writeFileSync(tmp, payload)
-                fs.renameSync(tmp, ACTIVITY_LOG_FILE)
-            } catch (err) {
-                console.warn('[claude-status] Failed to flush activity log:', err)
-            }
+            void this.flushNow()
         }, 250)
+    }
+
+    /**
+     * Write the rolling tail to disk.
+     *
+     * Serialise + write asynchronously. At the MAX_ENTRIES ceiling the payload
+     * is ~3.3 MB, and doing this with `writeFileSync` blocked the *renderer*
+     * thread for ~12 ms — a whole frame — every 250 ms for as long as hook
+     * events kept arriving, which is exactly when the terminal is busy
+     * painting. `writeFile` hands the work to the libuv threadpool instead.
+     *
+     * `flushing` serialises overlapping writes: without it two in-flight
+     * flushes race on the same temp path and the later rename can land the
+     * older snapshot. A flush requested while one is running sets
+     * `flushAgain`, so the newest state is always written exactly once more.
+     */
+    private async flushNow(): Promise<void> {
+        if (this.flushing) {
+            this.flushAgain = true
+            return
+        }
+        this.flushing = true
+        try {
+            // Atomic write so a concurrent reader (e.g. the settings tab's
+            // loadFromDisk on open) never parses a half-written log and
+            // throws it all away as corrupt.
+            const payload = JSON.stringify(
+                {
+                    version: 1,
+                    updated: Date.now(),
+                    entries: this.entries,
+                },
+                null,
+                2,
+            )
+            const tmp = `${ACTIVITY_LOG_FILE}.tmp-${process.pid}`
+            await fsp.writeFile(tmp, payload)
+            await fsp.rename(tmp, ACTIVITY_LOG_FILE)
+        } catch (err) {
+            console.warn('[claude-status] Failed to flush activity log:', err)
+        } finally {
+            this.flushing = false
+            if (this.flushAgain) {
+                this.flushAgain = false
+                void this.flushNow()
+            }
+        }
     }
 
     private loadFromDisk(): ActivityLogEntry[] {

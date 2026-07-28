@@ -130,7 +130,18 @@ export class SoundService {
             audio.onerror = cleanup
             this.currentAudio = audio
             this.currentAudioUrl = url
-            await audio.play()
+            try {
+                await audio.play()
+            } catch (playErr) {
+                // A rejected play() (autoplay policy, decode failure, unplayable
+                // codec) does not reliably fire `error`, so `cleanup` may never
+                // run — that left the object URL alive and `currentAudio`
+                // pointing at an element that will never play, which then made
+                // the next `stopCurrent()` pause a dead element instead of the
+                // real one. Release it here.
+                cleanup()
+                throw playErr
+            }
         } catch (err) {
             console.warn('[claude-status] Sound playback failed for', filePath, err)
         }

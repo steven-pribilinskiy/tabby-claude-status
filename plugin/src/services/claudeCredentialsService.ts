@@ -70,7 +70,20 @@ export class ClaudeCredentialsService {
             // (running `claude` rewrites it). Re-read from disk and re-cache so
             // a refresh becomes visible immediately rather than after the 30s
             // cache window elapses.
-            if (fresh.state === 'ok' && fresh.creds && fresh.creds.expiresAt <= Date.now()) {
+            //
+            // The `> 0` matters: `read()` normalises a missing/non-numeric
+            // `expiresAt` to 0 and treats only `> 0` as expiry-capable, so a
+            // credentials file without that field yields state 'ok' with
+            // expiresAt 0. Without the same guard here, `0 <= Date.now()` is
+            // always true and every call would re-read and re-parse the file
+            // synchronously — defeating the cache entirely on a code path that
+            // runs once per hook event in dynamic audio mode.
+            if (
+                fresh.state === 'ok' &&
+                fresh.creds &&
+                fresh.creds.expiresAt > 0 &&
+                fresh.creds.expiresAt <= Date.now()
+            ) {
                 const status = this.read()
                 this.cached = { status, readAt: Date.now() }
                 return status

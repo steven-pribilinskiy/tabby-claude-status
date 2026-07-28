@@ -16,6 +16,8 @@ export class EdgeTtsBackend implements TtsBackend {
 
     private voicesCache: TtsVoice[] | null = null
     private currentAudio: HTMLAudioElement | null = null
+    /** Object URL backing `currentAudio`, so `cancel()` can release it. */
+    private currentAudioUrl: string | null = null
 
     async isAvailable(): Promise<boolean> {
         try {
@@ -73,11 +75,18 @@ export class EdgeTtsBackend implements TtsBackend {
         })
 
         // Buffer the MP3 stream into a data URL and hand it to <audio>.
+        // `close()` must run even if the stream errors mid-utterance (dropped
+        // connection, Azure hanging up): msedge-tts opens a WebSocket per
+        // utterance, and an early throw here used to skip the close and leak
+        // the socket — one per failed announcement, for the renderer's life.
         const chunks: Buffer[] = []
-        for await (const chunk of audioStream as any) {
-            chunks.push(Buffer.from(chunk))
+        try {
+            for await (const chunk of audioStream as any) {
+                chunks.push(Buffer.from(chunk))
+            }
+        } finally {
+            tts.close()
         }
-        tts.close()
 
         const mp3 = Buffer.concat(chunks)
         const blob = new Blob([mp3], { type: 'audio/mpeg' })
@@ -89,6 +98,7 @@ export class EdgeTtsBackend implements TtsBackend {
         // rather than trust the caller's configured value.
         audio.volume = Math.max(0, Math.min(1, params.volume))
         this.currentAudio = audio
+        this.currentAudioUrl = url
         audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true })
         audio.addEventListener(
             'error',
@@ -107,6 +117,16 @@ export class EdgeTtsBackend implements TtsBackend {
             this.currentAudio.pause()
             this.currentAudio.src = ''
             this.currentAudio = null
+        }
+        // Release the blob explicitly rather than relying on the `error` event
+        // that clearing `src` happens to fire in Chromium — that's an
+        // implementation detail, and `cancel()` runs on every superseded
+        // utterance (AudioService.claimPlayback), so anything missed here is a
+        // decoded MP3 pinned for the renderer's lifetime. Double-revoking is a
+        // no-op, so this is safe even when the event does fire.
+        if (this.currentAudioUrl) {
+            URL.revokeObjectURL(this.currentAudioUrl)
+            this.currentAudioUrl = null
         }
     }
 }

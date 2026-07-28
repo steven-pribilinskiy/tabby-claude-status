@@ -41,6 +41,12 @@ export class AudioService {
      *  treated as a duplicate of the first and suppressed. The observed gap
      *  between the PermissionRequest and its paired Notification is ~6–6.5s. */
     private static readonly QUESTION_COALESCE_MS = 9000
+    /** Cap on `lastQuestionAnnounceBySession`. Its keys are Claude session ids,
+     *  which are unbounded over a long-lived Tabby run (every new session and
+     *  every `--resume` adds one) and were never removed. Entries older than the
+     *  coalesce window are dead weight, so sweep them once the map grows past
+     *  this. */
+    private static readonly MAX_QUESTION_SESSIONS = 256
 
     constructor(
         private configService: ClaudeStatusConfigService,
@@ -145,11 +151,18 @@ export class AudioService {
         // collapses announcements that overlap in time, which these don't.
         // Keyed per session so a genuine prompt in another tab still speaks;
         // also catches the occasional back-to-back idle_prompt double.
-        if (status === 'question') {
-            const session = String((ctx?.metadata as any)?.session || '')
-            const now = Date.now()
-            const last = session ? this.lastQuestionAnnounceBySession.get(session) : undefined
-            if (last !== undefined && now - last < AudioService.QUESTION_COALESCE_MS) {
+        //
+        // The timestamp is stamped at the *announcement* site below, not here.
+        // Stamping on arrival marked the burst as "already announced" even when
+        // this first event went on to be dropped — muted by the Zoom/mic gate,
+        // or superseded while the dynamic phrase was still generating — and the
+        // paired event ~6s later was then swallowed as a duplicate of an
+        // announcement the user never actually heard.
+        const questionSession =
+            status === 'question' ? String((ctx?.metadata as any)?.session || '') : ''
+        if (questionSession) {
+            const last = this.lastQuestionAnnounceBySession.get(questionSession)
+            if (last !== undefined && Date.now() - last < AudioService.QUESTION_COALESCE_MS) {
                 if (activityLogId) {
                     this.activityLog.setAudioOutcome(
                         activityLogId,
@@ -159,7 +172,6 @@ export class AudioService {
                 }
                 return
             }
-            if (session) this.lastQuestionAnnounceBySession.set(session, now)
         }
 
         // Supersede any in-flight announcement. Captured here (synchronously)
@@ -233,6 +245,7 @@ export class AudioService {
                         // flight — drop this phrase rather than speak over the
                         // newer status.
                         if (!this.claimPlayback(gen)) return
+                        this.noteQuestionAnnounced(questionSession)
                         this.speakText(phrase, config)
                         if (config.systemBeep) this.playBeep(config.volume)
                         if (activityLogId) {
@@ -268,6 +281,7 @@ export class AudioService {
                 }
 
                 if (!this.claimPlayback(gen)) return
+                this.noteQuestionAnnounced(questionSession)
                 this.dispatchPlayback(isSoundMode, staticPayload!, config)
                 if (activityLogId) {
                     this.activityLog.setAudioOutcome(activityLogId, 'announced')
@@ -276,6 +290,7 @@ export class AudioService {
             (err) => {
                 console.warn('[claude-status] Mute probe failed, playing anyway:', err)
                 if (staticPayload && this.claimPlayback(gen)) {
+                    this.noteQuestionAnnounced(questionSession)
                     this.dispatchPlayback(isSoundMode, staticPayload, config)
                     if (activityLogId) {
                         this.activityLog.setAudioOutcome(
@@ -287,6 +302,28 @@ export class AudioService {
                 }
             },
         )
+    }
+
+    /**
+     * Stamp "a question phrase just went out for this session", which is what
+     * the coalesce gate in `speak()` reads. Called only once an announcement
+     * has actually been claimed and dispatched, so a suppressed or superseded
+     * event never masks the paired one that follows.
+     *
+     * No-op for anything that isn't a question-status event with a session id.
+     */
+    private noteQuestionAnnounced(session: string): void {
+        if (!session) return
+        const now = Date.now()
+        this.lastQuestionAnnounceBySession.set(session, now)
+        if (this.lastQuestionAnnounceBySession.size <= AudioService.MAX_QUESTION_SESSIONS) return
+        // Sweep entries that can no longer suppress anything (older than the
+        // coalesce window). Bounded work, and only on the rare over-cap call.
+        for (const [id, ts] of this.lastQuestionAnnounceBySession) {
+            if (now - ts >= AudioService.QUESTION_COALESCE_MS) {
+                this.lastQuestionAnnounceBySession.delete(id)
+            }
+        }
     }
 
     /**
