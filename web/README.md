@@ -10,7 +10,7 @@ The plugin and the webapp share an IPC contract (`%TEMP%\tabby-claude-status.jso
 
 ## Run with Docker (recommended)
 
-The container is meant to live behind a label-driven local proxy on a shared `traefik` network — no port mapping, no host bind. Designed for [`local-proxy`](https://github.com/steven-pribilinskiy/local-proxy) but any compatible label scheme works.
+The container is meant to live behind a label-driven local proxy on a shared `traefik` network — no port mapping, no host bind. Designed for [`pintle`](https://github.com/aylith-labs/pintle) but any compatible label scheme works.
 
 ```bash
 docker compose up --build
@@ -24,7 +24,7 @@ Persistent state (snapshots, profile settings) lives in `./data/` and is bind-mo
 
 | Variable | Default | Notes |
 |---|---|---|
-| `PORT` | `3000` | Server listens on this port. local-proxy `local-proxy.port` label must match. |
+| `PORT` | `3000` | Server listens on this port. pintle `pintle.port` label must match. |
 | `DATA_DIR` | `/app/data` | Where `tabby-sessions.json` and `tabby-profile-settings.json` live. |
 | `TABBY_MCP_URL` | `http://host.docker.internal:3001/mcp` | Where `tabby-mcp-server` is reachable. From a container, the host-bridge alias is required. |
 

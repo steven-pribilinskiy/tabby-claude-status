@@ -1,5 +1,5 @@
-# Run behind a label-driven local proxy (e.g. local-proxy at
-# https://github.com/steven-pribilinskiy/local-proxy). No port mapping —
+# Run behind a label-driven local proxy (e.g. pintle at
+# https://github.com/aylith-labs/pintle). No port mapping —
 # the proxy reaches the container over the shared `traefik` network on its
 # internal port 3000.
 
@@ -8,8 +8,8 @@ services:
     build: .
     networks: [traefik]
     labels:
-      local-proxy.host: "tabby-claude-status.lvh.me"
-      local-proxy.port: "3000"
+      pintle.host: "tabby-claude-status.lvh.me"
+      pintle.port: "3000"
     volumes:
       - ./data:/app/data
     environment:

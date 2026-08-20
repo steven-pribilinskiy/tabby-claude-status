@@ -31,7 +31,7 @@ docker compose up --build
 # → reachable at https://tabby-claude-status.lvh.me
 ```
 
-This requires [`local-proxy`](https://github.com/steven-pribilinskiy/local-proxy) (or any compatible label-driven local proxy) on the `traefik` Docker network.
+This requires [`pintle`](https://github.com/aylith-labs/pintle) (or any compatible label-driven local proxy) on the `traefik` Docker network.
 
 ## Status
 
