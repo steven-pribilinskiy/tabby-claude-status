@@ -17,10 +17,24 @@ import {
     type CredentialsStatus,
 } from '../services/claudeCredentialsService'
 import {
+    applyHooks,
+    buildHookCommand,
+    HOOK_EVENTS,
+    isPluginHookCommand,
+    scanHooks,
+} from '../services/hookInstaller'
+import { hostApp } from '../services/hostApp'
+import {
     PiperInstallerService,
     type PiperVoiceCatalogEntry,
 } from '../services/piperInstallerService'
 import { SessionRestoreService } from '../services/sessionRestoreService'
+import {
+    hookJsPathFromCommand,
+    SHARED_HOOK_FILE,
+    sharedHookDir,
+    syncSharedHook,
+} from '../services/sharedHook'
 import { type OnlineSoundEntry, type SoundEntry, SoundService } from '../services/soundService'
 import { type AppRef, describeApp, type SpoolView } from '../services/spoolArbitration'
 import { SpoolOwnershipService } from '../services/spoolOwnershipService'
@@ -60,18 +74,6 @@ export interface HookLocationStatus {
      *  weirdness" after Setup hooks. */
     isLoading?: boolean
 }
-
-const HOOK_EVENTS = [
-    'PreToolUse',
-    'PostToolUse',
-    'PostToolUseFailure',
-    'Notification',
-    'Stop',
-    'UserPromptSubmit',
-    'PermissionRequest',
-    'SessionStart',
-    'SessionEnd',
-]
 
 interface BackendOption {
     id: TtsBackendId
@@ -769,7 +771,7 @@ interface BackendOption {
                     ></toggle>
                     <label class="toggle-label"
                            (click)="toggleField(config.store.claudeStatus.display, 'taskbarFlash')">
-                        Flash taskbar when Tabby is unfocused
+                        Flash taskbar when {{hostName}} is unfocused
                     </label>
                 </div>
 
@@ -1304,7 +1306,7 @@ interface BackendOption {
                         </a>
                         <span class="text-muted ms-2">
                             — download both <code>.onnx</code> and <code>.onnx.json</code> for a voice
-                            and save them next to the configured Piper model below; restart Tabby
+                            and save them next to the configured Piper model below; restart {{hostName}}
                             to pick up the new voice.
                         </span>
                     </div>
@@ -1635,7 +1637,7 @@ interface BackendOption {
                             </button>
                         </div>
                         <div class="small text-muted mb-2">
-                            Voices download into <code>{{piperModelsDir}}</code>. Tabby picks them up automatically — no restart required.
+                            Voices download into <code>{{piperModelsDir}}</code>. {{hostName}} picks them up automatically — no restart required.
                         </div>
                     </div>
                     <div class="p-3 pt-0" style="overflow-y: auto; flex: 1;">
@@ -1710,7 +1712,7 @@ interface BackendOption {
             <h5>Session restore</h5>
             <p class="text-muted small">
                 Persist each Claude Code session (cwd + session id) so you can
-                reopen them after closing Tabby. Opt-in — nothing is written
+                reopen them after closing {{hostName}}. Opt-in — nothing is written
                 to disk until this is enabled.
             </p>
 
@@ -1733,7 +1735,7 @@ interface BackendOption {
                     ></toggle>
                     <label class="toggle-label"
                            (click)="toggleField(config.store.claudeStatus.sessionRestore, 'autoResumeOnLaunch')">
-                        Auto-resume open sessions on Tabby launch
+                        Auto-resume open sessions on {{hostName}} launch
                     </label>
                 </div>
 
@@ -1906,9 +1908,9 @@ interface BackendOption {
                     </tbody>
                 </table>
                 <div *ngIf="activeSessions.length === 0" class="ms-3 text-muted small mb-3">
-                    No active sessions in this Tabby run. Run <code>claude</code> in a Tabby
+                    No active sessions in this {{hostName}} run. Run <code>claude</code> in a {{hostName}}
                     tab — a session appears here as soon as a hook event fires. Sessions
-                    Tabby remembers from the previous run are listed below.
+                    {{hostName}} remembers from the previous run are listed below.
                 </div>
                 <div *ngIf="activeSessions.length > 0 && filteredActiveSessions.length === 0"
                      class="ms-3 text-muted small mb-3">
@@ -1932,9 +1934,9 @@ interface BackendOption {
 
                     <div *ngIf="previousRunExpanded" class="claude-accordion-body">
                         <div class="text-muted small mb-2">
-                            Sessions Tabby remembers from the previous run. Click <strong>Fork</strong>
+                            Sessions {{hostName}} remembers from the previous run. Click <strong>Fork</strong>
                             to pick up where you left off; otherwise they roll into History next
-                            time Tabby restarts.
+                            time {{hostName}} restarts.
                         </div>
                         <table *ngIf="filteredPreviousRunSessions.length > 0"
                                class="table table-sm session-table" style="max-width: 900px">
@@ -2066,7 +2068,7 @@ interface BackendOption {
                                 />
                                 <div class="form-text small">
                                     Historical (closed) sessions are pruned after this many
-                                    <em>active</em> days. Idle/away days (Tabby closed or no
+                                    <em>active</em> days. Idle/away days ({{hostName}} closed or no
                                     Claude activity) don't count, so a break — a weekend, a
                                     vacation — never ages your sessions out. Open sessions are
                                     never time-pruned.
@@ -2287,6 +2289,10 @@ interface BackendOption {
                 Windows; click the caret to pick a specific WSL distro or all locations.
                 WSL hooks invoke the Windows <code>node.exe</code> via <code>/mnt/c/…</code>
                 so you don't have to install Node inside the distro.
+                The hooks point at a shared copy of <code>hook.js</code>
+                (<code>{{sharedHookPath}}</code>) rather than this app's plugin folder,
+                so one setup serves every app that has this plugin (Tabby and Torbie
+                alike); whichever runs the newest plugin keeps that copy current.
             </p>
 
             <div *ngIf="hooksHelpOpen" class="card mb-3" style="max-width: 900px">
@@ -2507,7 +2513,7 @@ interface BackendOption {
             <p class="text-muted small mb-2">
                 Every Claude-status event the plugin reacts to. The log persists to
                 <code class="small">{{activityLogPath}}</code> so it can be inspected
-                from outside Tabby.
+                from outside {{hostName}}.
                 <span *ngIf="!activityFilter">Filter by status to narrow.</span>
             </p>
 
@@ -2572,7 +2578,7 @@ interface BackendOption {
                             <code class="small">{{e.eventName || '—'}}</code>
                             <span *ngIf="!e.terminalMatched"
                                   class="badge text-bg-secondary ms-1"
-                                  title="Fired from a non-Tabby terminal — global audio only.">
+                                  [attr.title]="'Fired from a terminal outside ' + hostName + ' — global audio only.'">
                                 global
                             </span>
                         </td>
@@ -2666,15 +2672,27 @@ interface BackendOption {
                         </td>
                     </tr>
                     <tr>
-                        <td class="text-muted">Temp file</td>
+                        <td class="text-muted">Shared hook</td>
+                        <td>
+                            <code>{{sharedHookPath}}</code>
+                            <span *ngIf="sharedHookVersion" class="text-muted">&mdash; v{{sharedHookVersion}}</span>
+                            <span *ngIf="!sharedHookVersion" class="text-muted">&mdash; not installed yet (Setup hooks installs it)</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Host app</td>
+                        <td>{{hostName}} &mdash; <code>{{hostDataDir}}</code></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Spool dir</td>
                         <td><code>{{tempFilePath}}</code></td>
                     </tr>
                 </tbody>
             </table>
 
             <div *ngIf="!nodeInfoLoading && !nodeInfo.path" class="claude-alert claude-alert-warning mt-2" style="max-width: 600px">
-                <strong>Node.js not detected on Tabby's PATH.</strong>
-                If you use nvm or fnm, Tabby launched from a desktop shortcut may not
+                <strong>Node.js not detected on {{hostName}}'s PATH.</strong>
+                If you use nvm or fnm, {{hostName}} launched from a desktop shortcut may not
                 inherit your shell's PATH. Hooks will still work because Claude Code
                 provides its own Node.js runtime.
             </div>
@@ -2840,7 +2858,16 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
     }
     hookJsPath = ''
     hookJsExists = false
-    tempFilePath = path.join(os.tmpdir(), 'tabby-claude-status.json')
+    /** Where "Setup hooks" points Claude Code: the app-neutral copy of hook.js
+     *  shared by every app with this plugin (see sharedHook.ts). */
+    sharedHookPath = path.join(sharedHookDir(), SHARED_HOOK_FILE)
+    sharedHookVersion: string | null = null
+    /** The spool hook.js writes into and the plugin reads from. */
+    tempFilePath = path.join(os.tmpdir(), 'tabby-claude-status.d')
+    /** The app this plugin is running in: "Tabby", "Torbie", ... */
+    readonly hostName = hostApp().name
+    /** Where this app keeps the plugin's session registry and crash log. */
+    readonly hostDataDir = hostApp().dataDir
 
     piperInstalled = false
     piperInstalling = false
@@ -2940,8 +2967,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             event: 'SessionStart',
             statusLabel: 'working',
             statusColor: '#0d6efd',
-            purpose:
-                'Captures session id, cwd, and Tabby profile when a Claude Code session begins. Drives the "Open sessions" list above and seeds the tab as working.',
+            purpose: `Captures session id, cwd, and ${hostApp().name} profile when a Claude Code session begins. Drives the "Open sessions" list above and seeds the tab as working.`,
         },
         {
             event: 'UserPromptSubmit',
@@ -3175,6 +3201,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         t = performance.now()
         this.hookJsPath = this.getHookJsPath()
         this.hookJsExists = fs.existsSync(this.hookJsPath)
+        this.refreshSharedHook(false)
         mark('hookJs probe', t)
         document.addEventListener('click', this.docClickListener, true)
 
@@ -3777,8 +3804,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         try {
             this.onlineCatalog = await this.soundService.listOnlineCatalog()
             if (this.onlineCatalog.length === 0) {
-                this.onlineCatalogError =
-                    'No online sounds curated yet. Add entries to online-sounds/catalog.json (see the _schema field there) and reload Tabby.'
+                this.onlineCatalogError = `No online sounds curated yet. Add entries to online-sounds/catalog.json (see the _schema field there) and reload ${this.hostName}.`
             }
         } catch (err) {
             this.onlineCatalogError = err instanceof Error ? err.message : String(err)
@@ -5017,20 +5043,31 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
                 throw err
             }
             const settings = JSON.parse(raw)
-            const hooks = settings?.hooks || {}
-            const missing: string[] = []
-            let configured = 0
-            for (const event of HOOK_EVENTS) {
-                const groups: any[] = hooks[event] || []
-                const hit = groups.some((group: any) => {
-                    const inner: any[] = group?.hooks || []
-                    return inner.some((h) => this.isTabbyHookCommand(h?.command))
-                })
-                if (hit) configured++
-                else missing.push(event)
-            }
+            const scan = scanHooks(settings)
+            // A hook pointing at a hook.js that no longer exists (the app whose
+            // plugin folder it named was uninstalled, or the plugin moved)
+            // fails silently on every event. Count it as missing so the
+            // location shows up as needing Setup.
+            const missingScripts = [
+                ...new Set(
+                    scan.commands
+                        .map((c) => hookJsPathFromCommand(c))
+                        .filter(
+                            (p): p is string =>
+                                !!p && /^[A-Za-z]:[\\/]/.test(p) && !fs.existsSync(p),
+                        ),
+                ),
+            ]
+            const stale = missingScripts.length > 0
+            const missing = stale ? [...HOOK_EVENTS] : scan.missing
+            const configured = stale ? 0 : scan.configured.length
             return {
                 ...base,
+                ...(stale
+                    ? {
+                          error: `Hooks point at a hook.js that no longer exists: ${missingScripts.join(', ')}. Run Setup hooks to repoint them.`,
+                      }
+                    : {}),
                 state:
                     configured === HOOK_EVENTS.length
                         ? 'ok'
@@ -5051,9 +5088,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
      * path style (forward/backward slashes, escaped backslashes) it uses.
      */
     private isTabbyHookCommand(command: unknown): boolean {
-        if (typeof command !== 'string' || !command) return false
-        const lower = command.toLowerCase().replace(/\\\\/g, '\\')
-        return lower.includes('tabby-claude-status') && lower.includes('hook.js')
+        return isPluginHookCommand(command)
     }
 
     /**
@@ -5241,11 +5276,15 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
             }
         }
 
+        // One install serves every app with this plugin: point the hooks at
+        // the shared per-user copy of hook.js, not at this app's plugin folder.
+        const hookJs = this.refreshSharedHook(true) ?? (this.hookJsPath || this.getHookJsPath())
+
         const successes: string[] = []
         const failures: string[] = []
         for (const target of targets) {
             try {
-                this.writeHooksToTarget(target)
+                this.writeHooksToTarget(target, hookJs)
                 successes.push(target.label)
             } catch (e: any) {
                 console.error(`[claude-status] Failed to setup hooks for ${target.label}:`, e)
@@ -5414,7 +5453,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         }
     }
 
-    private writeHooksToTarget(target: SetupTarget): void {
+    private writeHooksToTarget(target: SetupTarget, hookJs: string): void {
         const settingsPath =
             target.kind === 'windows'
                 ? path.join(os.homedir(), '.claude', 'settings.json')
@@ -5432,69 +5471,36 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         if (fs.existsSync(settingsPath)) {
             settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
         }
-        if (!settings.hooks) settings.hooks = {}
 
-        const hookCmd = this.buildHookCmd(target.kind)
-
-        for (const event of HOOK_EVENTS) {
-            if (!settings.hooks[event]) settings.hooks[event] = []
-            const matcherGroups: any[] = settings.hooks[event]
-
-            // Replace any existing tabby-claude-status hook in place. Match by
-            // our `isTabbyHookCommand` so we don't accidentally clobber the
-            // user's other hook.js entries (e.g. agent-flow/hook.js,
-            // Claude-Code-Agent-Monitor/hook-handler.js) — that was the bug
-            // before, where any command containing "hook.js" got overwritten.
-            let found = false
-            for (const group of matcherGroups) {
-                if (!group.hooks) continue
-                const idx = group.hooks.findIndex(
-                    (h: any) => h?.type === 'command' && this.isTabbyHookCommand(h.command),
-                )
-                if (idx >= 0) {
-                    group.hooks[idx] = hookCmd
-                    found = true
-                    break
-                }
-            }
-            if (!found) {
-                matcherGroups.push({ hooks: [hookCmd] })
-            }
-        }
+        // Replaces any existing tabby-claude-status hook in place (whichever
+        // app's copy of hook.js it pointed at) and leaves the user's other
+        // hooks (curl sinks, agent-flow/hook.js, ...) alone. See
+        // hookInstaller.applyHooks.
+        applyHooks(settings, buildHookCommand(target.kind, hookJs, this.nodeInfo.path))
 
         this.writeJsonAtomic(settingsPath, settings)
     }
 
     /**
-     * Build the hook command string for the requested target.
-     *
-     * Windows: native `"<node.exe>" "<hook.js>"` — both args are JS strings
-     * with single backslashes; JSON.stringify escapes them on write.
-     *
-     * WSL: bash invokes the Windows `node.exe` via the `/mnt/<drive>/…`
-     * passthrough, then passes the Windows `hook.js` path as its argv. Inside
-     * bash double quotes, `\\` collapses to `\` — so we need to write `\\`
-     * pairs to the JSON file, which means our JS string holds doubled
-     * backslashes (`\\\\` source → `\\` in memory → `\\\\` on disk).
+     * Install (`install`) or just refresh the shared hook.js copy. Returns its
+     * path when it is usable, null when it is absent or couldn't be written
+     * (the caller then falls back to this app's own plugin copy).
      */
-    private buildHookCmd(kind: 'windows' | 'wsl'): { type: 'command'; command: string } {
-        const hookJs = this.hookJsPath || this.getHookJsPath()
-        if (kind === 'windows') {
-            const node = this.nodeInfo.path ? `"${this.nodeInfo.path}"` : 'node'
-            return { type: 'command', command: `${node} "${hookJs}"` }
+    private refreshSharedHook(install: boolean): string | null {
+        const bundled = this.hookJsPath || this.getHookJsPath()
+        const r = syncSharedHook({
+            bundledHookPath: bundled,
+            version: PLUGIN_PACKAGE.version,
+            installedBy: this.hostName,
+            install,
+        })
+        this.sharedHookPath = r.hookPath
+        this.sharedHookVersion = r.installedVersion
+        if (r.action === 'failed') {
+            console.warn('[claude-status] shared hook.js sync failed:', r.error)
+            return null
         }
-        const nodeWindowsPath = this.nodeInfo.path || 'C:\\Program Files\\nodejs\\node.exe'
-        const nodeWslPath = this.toWslMountPath(nodeWindowsPath)
-        // Double the backslashes so bash's `"…"` quote-unescaping yields a
-        // single backslash per separator when calling node.exe.
-        const hookJsForBash = hookJs.replace(/\\/g, '\\\\')
-        return { type: 'command', command: `"${nodeWslPath}" "${hookJsForBash}"` }
-    }
-
-    private toWslMountPath(winPath: string): string {
-        const m = winPath.match(/^([A-Za-z]):[\\/](.*)$/)
-        if (!m) return winPath
-        return `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`
+        return r.action === 'absent' ? null : r.hookPath
     }
 
     /**
