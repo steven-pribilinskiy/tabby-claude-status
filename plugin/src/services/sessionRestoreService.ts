@@ -1,18 +1,21 @@
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { Inject, Injectable, Optional } from '@angular/core'
 import { NotificationsService, ProfilesService } from 'tabby-core'
 import { TerminalService } from 'tabby-local'
 import type { ClaudeSessionRecord } from '../interfaces/types'
 import { ClaudeStatusConfigService } from './configService'
+import { hostApp, migrateLegacyHostData, RUNS_DIR_NAME, SESSIONS_FILE_NAME } from './hostApp'
 
 /**
- * On-disk location for persisted Claude sessions. Kept under Tabby's AppData
- * dir rather than %TEMP% so it survives reboots and Windows tmp cleanup.
+ * On-disk location for persisted Claude sessions. Kept under the host app's
+ * data dir (`%APPDATA%\tabby`, `%APPDATA%\torbie`, or a portable install's
+ * `data\`) rather than %TEMP% so it survives reboots and Windows tmp cleanup.
+ * Per app, not shared: a session belongs to the app whose tab ran it, and
+ * that app is the one that should offer to resume it.
  */
-const TABBY_DATA_DIR = path.join(process.env.APPDATA || os.homedir(), 'tabby')
-const SESSIONS_FILE = path.join(TABBY_DATA_DIR, 'tabby-claude-status-sessions.json')
+const HOST = hostApp()
+const SESSIONS_FILE = path.join(HOST.dataDir, SESSIONS_FILE_NAME)
 
 /**
  * Registry of currently-active Tabby windows. Each window writes one file
@@ -25,7 +28,7 @@ const SESSIONS_FILE = path.join(TABBY_DATA_DIR, 'tabby-claude-status-sessions.js
  * sessions stay active, and only genuinely-exited windows become "previous
  * run".
  */
-const RUNS_DIR = path.join(TABBY_DATA_DIR, 'tabby-claude-runs')
+const RUNS_DIR = path.join(HOST.dataDir, RUNS_DIR_NAME)
 
 /**
  * How long to coalesce session-file writes. `record()` fires on every Claude
@@ -131,6 +134,15 @@ export class SessionRestoreService {
         private notifications: NotificationsService | null,
         @Optional() @Inject(ProfilesService) private profilesService: ProfilesService | null,
     ) {
+        // Before the first read: a host other than Tabby (Torbie, a portable
+        // install) inherits what older plugin versions wrote under
+        // %APPDATA%\tabby, so its sessions don't vanish on upgrade.
+        const { copied } = migrateLegacyHostData(HOST.dataDir, HOST.legacyDataDir)
+        if (copied.length) {
+            console.log(
+                `[claude-status] carried ${copied.length} file(s) from ${HOST.legacyDataDir} to ${HOST.dataDir}`,
+            )
+        }
         this.migrateIfNeeded()
     }
 
@@ -651,8 +663,8 @@ export class SessionRestoreService {
             const tab = await this.terminalService.openTab(profile, openCwd)
             if (!tab) {
                 const msg = profile
-                    ? `Tabby returned no tab for profile ${profile.name || profile.id}. Check the profile's command and cwd.`
-                    : 'Tabby returned no tab. The Claude session was recorded before profile capture shipped, and no profile could be inferred from the cwd. Open a tab manually with the right shell and try again.'
+                    ? `${HOST.name} returned no tab for profile ${profile.name || profile.id}. Check the profile's command and cwd.`
+                    : `${HOST.name} returned no tab. The Claude session was recorded before profile capture shipped, and no profile could be inferred from the cwd. Open a tab manually with the right shell and try again.`
                 console.error('[claude-status] resumeSession:', msg, { session, profile })
                 this.notifications?.error?.(msg)
                 return { ok: false, error: msg }
@@ -798,7 +810,7 @@ export class SessionRestoreService {
             console.warn(
                 '[claude-status] Could not resolve profile for session',
                 session.sessionId,
-                '— using Tabby default.',
+                `— using ${HOST.name} default.`,
             )
             return undefined
         } catch (err) {

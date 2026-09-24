@@ -1,10 +1,10 @@
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { Injectable } from '@angular/core'
+import { CRASH_LOG_FILE_NAME, hostApp } from './hostApp'
 
 /**
- * Persistent, bounded crash/error log for the Tabby renderer.
+ * Persistent, bounded crash/error log for the host app's renderer.
  *
  * Tabby's own `log.txt` only captures the *main* process; a plugin's
  * renderer-side `console.error`/uncaught exceptions never reach it, and Electron
@@ -18,8 +18,9 @@ import { Injectable } from '@angular/core'
  * events are rare, so the cost is negligible. The file is rotated (oldest half
  * dropped) once it exceeds `MAX_BYTES` so it can never grow without bound.
  */
-const TABBY_DATA_DIR = path.join(process.env.APPDATA || os.homedir(), 'tabby')
-export const CRASH_LOG_FILE = path.join(TABBY_DATA_DIR, 'tabby-claude-status-crash.log')
+// In the host app's data dir (Tabby's or Torbie's), next to its own logs.
+const HOST_DATA_DIR = hostApp().dataDir
+export const CRASH_LOG_FILE = path.join(HOST_DATA_DIR, CRASH_LOG_FILE_NAME)
 const MAX_BYTES = 256 * 1024
 
 @Injectable({ providedIn: 'root' })
@@ -67,7 +68,7 @@ export class ClaudeCrashLogService {
                 stack: stack ? String(stack).slice(0, 8000) : undefined,
                 ...extra,
             })}\n`
-            fs.mkdirSync(TABBY_DATA_DIR, { recursive: true })
+            fs.mkdirSync(HOST_DATA_DIR, { recursive: true })
             this.rotateIfNeeded(entry.length)
             fs.appendFileSync(CRASH_LOG_FILE, entry)
         } catch {
