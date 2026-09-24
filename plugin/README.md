@@ -1,8 +1,14 @@
 # tabby-claude-status
 
-Visual status indicators and TTS announcements for [Claude Code](https://claude.ai/code) activity inside the [Tabby](https://tabby.sh) terminal.
+Works with: [![Tabby](https://img.shields.io/badge/Tabby-tabby.sh-3a3f58?style=for-the-badge)](https://tabby.sh) [![Torbie](https://img.shields.io/badge/Torbie-aylith--labs.github.io%2Ftorbie-2f6f5e?style=for-the-badge)](https://aylith-labs.github.io/torbie/)
 
-Claude Code fires hook events → a tiny `hook.js` script writes the current event to `%TEMP%\tabby-claude-status.json` → this plugin watches the file and updates one or more visual surfaces on the matching terminal tab, plus (optionally) speaks a short phrase.
+Visual status indicators and TTS announcements for [Claude Code](https://claude.ai/code) activity inside the [Tabby](https://tabby.sh) and [Torbie](https://aylith-labs.github.io/torbie/) terminals. Torbie is a Tabby fork that keeps Tabby's plugin API, so the same package loads in both.
+
+Claude Code fires hook events → a tiny `hook.js` script drops one file per event into `%TEMP%\tabby-claude-status.d` → this plugin reads that spool and updates one or more visual surfaces on the matching terminal tab, plus (optionally) speaks a short phrase.
+
+## Install
+
+In either app: **Settings → Plugins**, search `tabby-claude-status`, install, restart. Then **Settings → Claude Status → Hooks → Setup hooks** to wire Claude Code to it. With the plugin in both apps, set up hooks once from either; see [Claude Code hook wiring](#claude-code-hook-wiring).
 
 ## Status mapping
 
@@ -26,19 +32,19 @@ Every surface is individually toggleable in **Settings → Claude Status → Dis
 | Tab title emoji prefix | off | Per-status emoji configurable; defaults `⚡ ❓ ✅ ❌` |
 | Indeterminate progress bar | off | Pulses during `working` |
 | Activity marker dot | off | The same dot Tabby uses for background activity; shown on `question` / `error` |
-| Taskbar flash | off | Only when Tabby is unfocused |
+| Taskbar flash | off | Only when the app is unfocused |
 | Taskbar icon overlay | off | 16×16 coloured PNGs from `assets/overlay-*.png` |
 
 ## Session restore (opt-in)
 
-Enable **Settings → Claude Status → Session restore → Enable session tracking** to persist each Claude Code session's `{ sessionId, cwd, title, lastSeen }` to `%APPDATA%\tabby\tabby-claude-status-sessions.json`. Nothing is written until the toggle is on.
+Enable **Settings → Claude Status → Session restore → Enable session tracking** to persist each Claude Code session's `{ sessionId, cwd, title, lastSeen }` to `tabby-claude-status-sessions.json` in the app's own data folder: `%APPDATA%\tabby` for Tabby, `%APPDATA%\torbie` for Torbie, `data\` beside the executable for a portable install. Each app keeps its own history and resumes only its own sessions. The first time Torbie (or a portable install) runs this version, it copies the history older versions wrote to `%APPDATA%\tabby`, leaving the original untouched. Nothing is written until the toggle is on.
 
 Once enabled:
 - Every hook event updates the matching session entry (cwd follows `cd`s inside the Claude session).
 - Sessions older than **Retention (days)** are pruned automatically.
 - The settings tab lists saved sessions with per-row **Resume** / **✕ Forget** buttons.
 - **Resume all now** opens a new local tab per session at the recorded cwd and types `claude --resume <sessionId>` once the pty is ready.
-- Turn on **Auto-resume all saved sessions on Tabby launch** to have the plugin do that automatically ~1.5s after Tabby boots.
+- Turn on **Auto-resume open sessions on launch** to have the plugin do that automatically ~1.5s after the app boots.
 - **Extra args** are appended to every resume command (e.g. `--model opus`).
 
 Under the hood this uses `tabby-local`'s `TerminalService.openTab(undefined, cwd)` + `BaseTerminalTabComponent.sendInput()`.
@@ -74,14 +80,18 @@ Each backend remembers its own voice selection (`voicesByBackend`), so switching
 npm install
 npm run watch          # rebuild on change
 npm run build          # one-shot production build
-npm run install-plugin # build + copy into %APPDATA%\tabby\plugins\node_modules\tabby-claude-status
+npm run install-plugin # build + copy into every installed app's plugins\node_modules\tabby-claude-status
+                       #   (%APPDATA%\tabby and/or %APPDATA%\torbie)
+npm run install-plugin -- --app tabby   # or --app torbie: just one
+npm run install-plugin -- --dir <data>  # a portable install's data folder
+npm test               # node --test over test/*.test.mjs
 ```
 
-After `install-plugin`, restart Tabby. The plugin loads via its module entry (`dist/index.js`).
+After `install-plugin`, restart the app. The plugin loads via its module entry (`dist/index.js`).
 
-## Installing via Tabby's plugin manager
+## Installing via the plugin manager
 
-Once published to npm, users can install this plugin by name from Tabby → Settings → Plugins → search `tabby-claude-status`.
+Tabby and Torbie both list npm packages tagged `tabby-plugin`, so users install this plugin by name from Settings → Plugins → search `tabby-claude-status`, in either app.
 
 ## Layout
 
@@ -113,31 +123,33 @@ assets/
 hook.js                                   Cross-platform Claude Code hook script
 rspack.config.js                          Build (UMD, node target, tabby externals); SWC handles TS via builtin:swc-loader
 tsconfig.json
-scripts/install-plugin.js                 Copies build output into Tabby's plugin dir
+scripts/install-plugin.js                 Copies build output into Tabby's and/or Torbie's plugin dir
 ```
 
 ## Claude Code hook wiring
 
-The hook script is invoked by Claude Code for each event. Point all 9 events at the same command in `%USERPROFILE%\.claude\settings.json`:
+The hook script is invoked by Claude Code for each event. `~/.claude/settings.json` is per user, not per app, so one set of hooks serves every app that has the plugin: they all read the same spool. **Settings → Claude Status → Hooks → Setup hooks** (in either app) copies `hook.js` to an app-neutral per-user folder, `%LOCALAPPDATA%\tabby-claude-status\hook.js`, and points all 9 events at it in `%USERPROFILE%\.claude\settings.json`:
 
 ```jsonc
 {
   "hooks": {
-    "PreToolUse":         [{ "hooks": [{ "type": "command", "command": "\"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\<you>\\AppData\\Roaming\\tabby\\plugins\\node_modules\\tabby-claude-status\\hook.js\"" }] }]
+    "PreToolUse":         [{ "hooks": [{ "type": "command", "command": "\"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\<you>\\AppData\\Local\\tabby-claude-status\\hook.js\"" }] }]
     // ... same for PostToolUse, PostToolUseFailure, Notification, Stop,
     //     UserPromptSubmit, PermissionRequest, SessionStart, SessionEnd
   }
 }
 ```
 
-The Settings tab has a **Setup Claude Hooks** button that writes this for you.
+Running Setup again from the other app replaces the entries in place rather than adding a second set, and older entries that point into an app's `plugins` folder are repointed the same way. Each app refreshes the shared `hook.js` on load when its plugin is newer, never older, so removing the plugin from one app doesn't break hooks for the other. The Hooks tab flags a location whose hooks name a `hook.js` that no longer exists.
+
+`UserPromptSubmit` is what marks a tab "working" as soon as you send a prompt; without it a tab stays idle until the first tool call.
 
 ### WSL
 
-From inside WSL, invoke Windows `node.exe` via interop so PIDs and `%TEMP%` resolve to the Windows side (the plugin can't match Linux PIDs):
+From inside WSL, invoke Windows `node.exe` via interop so PIDs and `%TEMP%` resolve to the Windows side (the plugin can't match Linux PIDs). Setup hooks writes this to each distro's `~/.claude/settings.json`, for all 9 events, `UserPromptSubmit` included:
 
 ```bash
-"/mnt/c/Program Files/nodejs/node.exe" "C:\Users\<you>\AppData\Roaming\tabby\plugins\node_modules\tabby-claude-status\hook.js"
+"/mnt/c/Program Files/nodejs/node.exe" "C:\\Users\\<you>\\AppData\\Local\\tabby-claude-status\\hook.js"
 ```
 
 ## Upstream
