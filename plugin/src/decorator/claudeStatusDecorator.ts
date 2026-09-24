@@ -1,4 +1,5 @@
 import * as fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { Injectable } from '@angular/core'
@@ -14,6 +15,7 @@ import { AudioService } from '../services/audioService'
 import { ClaudeStatusConfigService } from '../services/configService'
 import { ClaudeCrashLogService } from '../services/crashLogService'
 import { SessionRestoreService } from '../services/sessionRestoreService'
+import { SpoolDrainer, STALE_EVENT_MS } from '../services/spoolDrain'
 import { SpoolOwnershipService } from '../services/spoolOwnershipService'
 import { StatusActivityLogService } from '../services/statusActivityLogService'
 import { StatusParserService } from '../services/statusParserService'
@@ -80,9 +82,15 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
      *  enough to cover a synchronous claim write plus FS latency, short enough
      *  that a genuinely ownerless announcement still feels immediate. */
     private static readonly PEER_CLAIM_GRACE_MS = 350
-    /** Spool filenames currently being read, so overlapping watch fires don't
-     *  double-process the same event before it's deleted. */
-    private processingFiles: Set<string> = new Set()
+    /** Reads the spool off the renderer thread; one pass at a time, so
+     *  overlapping watch fires never double-process an event. */
+    private readonly spoolDrainer = new SpoolDrainer(
+        STATUS_DIR,
+        (data) => this.handleEventData(data),
+        {
+            onError: (err) => console.warn('[claude-status] spool drain failed:', err),
+        },
+    )
     /**
      * Flipped to true when the renderer fires `beforeunload` — i.e. the
      * user is closing the Tabby window. Tabby then mass-detaches every
@@ -300,9 +308,11 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         if (this.fileWatcher || this.pollInterval) return
         try {
             fs.mkdirSync(STATUS_DIR, { recursive: true })
-            this.cleanupSpoolDir()
+            this.cleanupLegacyStatusFile()
             // Drain anything already waiting (events that fired during startup,
-            // before the watcher attached).
+            // before the watcher attached). Async and chunked: a backlog of
+            // thousands of files must not freeze the renderer — see
+            // SpoolDrainer.
             this.processSpoolDir()
 
             this.fileWatcher = fs.watch(STATUS_DIR, { persistent: false }, () => {
@@ -325,6 +335,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
     }
 
     private stopFileWatcher(): void {
+        this.spoolDrainer.stop()
         if (this.fileWatcher) {
             this.fileWatcher.close()
             this.fileWatcher = null
@@ -335,72 +346,23 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         }
     }
 
-    /** One-time cleanup on startup: remove the legacy single status file and
-     *  any stale `.tmp` leftovers from a hook that crashed mid-write. */
-    private cleanupSpoolDir(): void {
-        try {
-            fs.unlinkSync(LEGACY_STATUS_FILE)
-        } catch {
+    /** Remove the pre-spool single status file, off the renderer thread.
+     *  Stale `.tmp` leftovers from a hook that died mid-write are the
+     *  drainer's job now. */
+    private cleanupLegacyStatusFile(): void {
+        fsp.unlink(LEGACY_STATUS_FILE).catch(() => {
             /* not present — fine */
-        }
-        try {
-            for (const name of fs.readdirSync(STATUS_DIR)) {
-                if (name.endsWith('.tmp')) {
-                    try {
-                        fs.unlinkSync(path.join(STATUS_DIR, name))
-                    } catch {
-                        /* racing a live write — leave it */
-                    }
-                }
-            }
-        } catch {
-            /* dir vanished — fine */
-        }
+        })
     }
 
     /**
-     * Read every pending event file in the spool dir, in chronological order
-     * (filenames are `<ts>-<pid>-<rand>.json`), process it, and delete it.
-     * Each file is consumed exactly once even if the watcher fires multiple
-     * times for the same batch.
+     * Drain the spool: every pending event file, in chronological order
+     * (filenames are `<ts>-<pid>-<rand>.json`), handled and deleted; stale
+     * ones deleted unread. Called from every watcher callback and poll tick;
+     * the drainer coalesces overlapping requests into one follow-up pass.
      */
     private processSpoolDir(): void {
-        let names: string[]
-        try {
-            names = fs.readdirSync(STATUS_DIR)
-        } catch {
-            return
-        }
-        names = names.filter((n) => n.endsWith('.json')).sort()
-        for (const name of names) {
-            if (this.processingFiles.has(name)) continue
-            this.processingFiles.add(name)
-            const full = path.join(STATUS_DIR, name)
-            let data: any
-            try {
-                const raw = fs.readFileSync(full, 'utf-8')
-                data = JSON.parse(raw)
-            } catch {
-                // Couldn't read/parse. Atomic rename means a present file is
-                // complete, so this is a transient FS hiccup — leave it for the
-                // next pass rather than deleting an event we never saw.
-                this.processingFiles.delete(name)
-                continue
-            }
-            // Consume the file regardless of how we handle the data, so stale
-            // or duplicate events don't accumulate.
-            try {
-                fs.unlinkSync(full)
-            } catch {
-                /* already gone */
-            }
-            this.processingFiles.delete(name)
-            try {
-                this.handleEventData(data)
-            } catch (_) {
-                /* a bad event shouldn't stall the rest of the batch */
-            }
-        }
+        void this.spoolDrainer.request()
     }
 
     private handleEventData(data: any): void {
@@ -411,7 +373,9 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
             // file left over from a previous run, read on startup). Uses a time
             // delta, not a stored high-water mark, so a backward clock change
             // can't wedge it permanently.
-            if (Date.now() - data.ts > 10000) return
+            // The drainer already discards most stale files unread by their
+            // name; this catches the rest (an unrecognised name, a slow pass).
+            if (Date.now() - data.ts > STALE_EVENT_MS) return
 
             // Dedupe in case the same event is somehow seen twice. A distinct
             // event sharing a millisecond with a prior one has a different

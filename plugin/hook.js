@@ -11,6 +11,40 @@ const { execSync } = require('node:child_process')
 // can't clobber each other's event before the plugin reads it.
 const STATUS_DIR = path.join(os.tmpdir(), 'tabby-claude-status.d')
 
+// Keep the spool bounded. Only a running app with a terminal open reads it, so
+// while none does (app closed, Claude in VS Code or Windows Terminal, another
+// app holding the spool) every event stays behind — 3,460 of them once, which
+// the next app to start then had to wade through. Readers ignore events older
+// than 10 s, so anything well past that is dead weight and safe to remove.
+// Bounded per run so a hook never spends long on it: Claude waits for hooks.
+const PRUNE_THRESHOLD = 200
+const PRUNE_AGE_MS = 60 * 1000
+const PRUNE_MAX_PER_RUN = 100
+
+function pruneSpool(now) {
+    let names
+    try {
+        names = fs.readdirSync(STATUS_DIR)
+    } catch (_) {
+        return 0
+    }
+    if (names.length <= PRUNE_THRESHOLD) return 0
+    const cutoff = now - PRUNE_AGE_MS
+    let removed = 0
+    for (const name of names) {
+        const m = /^(\d{12,})-/.exec(name)
+        if (!m || Number(m[1]) >= cutoff) continue
+        try {
+            fs.unlinkSync(path.join(STATUS_DIR, name))
+            removed++
+        } catch (_) {
+            /* a reader took it first */
+        }
+        if (removed >= PRUNE_MAX_PER_RUN) break
+    }
+    return removed
+}
+
 // ── Platform-specific process tree walkers ──────────────────────────
 
 /**
@@ -216,6 +250,8 @@ process.stdin.on('end', () => {
         } catch (_) {
             /* server offline is fine */
         }
+
+        pruneSpool(Date.now())
     } catch (_) {
         // Silently ignore parse errors
     }
