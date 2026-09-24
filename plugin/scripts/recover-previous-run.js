@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Recover the sessions from the most-recent *closed* Tabby run back into the
+// Recover the sessions from the most-recent *closed* app run back into the
 // "Previous run" bucket, so you can Fork/resume them where you left off.
 //
 // Why this exists: a pre-fix crash could force-close a run's still-open
@@ -7,32 +7,36 @@
 // sessionRestoreService.ts). Those sessions are still resumable from History,
 // but this puts them back under "Previous run" where they belong.
 //
-// USAGE (run while Tabby is CLOSED, so the running instance can't clobber it):
+// USAGE (run while the app is CLOSED, so the running instance can't clobber it):
 //   node scripts/recover-previous-run.js            # reopen the last closed run
 //   node scripts/recover-previous-run.js --run <id> # target a specific runId
 //   node scripts/recover-previous-run.js --list     # just show closed runs
+//   add --app tabby|torbie to pick the app (required when both have sessions),
+//   or --dir <data dir> for a portable install
 //
 // It only flips `closed:false` and adds the run to `previousRunIds`; it never
 // deletes anything, and it writes atomically (temp + rename).
 
 const fs = require('node:fs')
-const os = require('node:os')
 const path = require('node:path')
-
-function tabbyConfigDir() {
-    if (process.platform === 'win32') {
-        if (!process.env.APPDATA) throw new Error('APPDATA is not set.')
-        return path.join(process.env.APPDATA, 'tabby')
-    }
-    if (process.platform === 'darwin') {
-        return path.join(os.homedir(), 'Library', 'Application Support', 'tabby')
-    }
-    return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'tabby')
-}
-
-const SESSIONS_FILE = path.join(tabbyConfigDir(), 'tabby-claude-status-sessions.json')
+const { selectHosts } = require('./hosts')
 
 const args = process.argv.slice(2)
+
+// Each app keeps its own sessions file (see src/services/hostApp.ts). Without
+// --app/--dir, use whichever app has one, and refuse to guess between two.
+const explicit = args.includes('--app') || args.includes('--dir')
+const candidates = selectHosts(args, 'all')
+    .map((h) => ({ ...h, file: path.join(h.dir, 'tabby-claude-status-sessions.json') }))
+    .filter((h) => explicit || fs.existsSync(h.file))
+if (candidates.length > 1) {
+    const names = candidates.map((h) => h.name).join(' and ')
+    const ids = candidates.map((h) => h.id).join('|')
+    console.error(`Sessions files found for ${names}. Pick one with --app <${ids}>.`)
+    process.exit(1)
+}
+const HOST = candidates[0] || { ...selectHosts(['--app', 'tabby'])[0] }
+const SESSIONS_FILE = HOST.file || path.join(HOST.dir, 'tabby-claude-status-sessions.json')
 const listOnly = args.includes('--list')
 const runArgIdx = args.indexOf('--run')
 const wantedRun = runArgIdx >= 0 ? args[runArgIdx + 1] : null
@@ -97,5 +101,5 @@ fs.renameSync(tmp, SESSIONS_FILE)
 
 console.log(
     `Reopened ${reopened} session(s) from run ${targetRun} into "Previous run".\n` +
-        `  ${[...target.cwds].join('\n  ')}\n\nRestart Tabby → open Claude Status ▸ Sessions to Fork them.`,
+        `  ${[...target.cwds].join('\n  ')}\n\nRestart ${HOST.name} → open Claude Status ▸ Sessions to Fork them.`,
 )
