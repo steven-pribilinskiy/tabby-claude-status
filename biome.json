@@ -10,6 +10,7 @@
 			"plugin/src/**/*.{ts,tsx,js,mjs,cjs}",
 			"plugin/hook.js",
 			"plugin/scripts/**/*.js",
+			"plugin/test/**/*.mjs",
 			"plugin/rspack.config.js",
 			"web/src/**/*.{ts,tsx,js,mjs,cjs}",
 			"web/vite.config.ts",
@@ -73,7 +74,10 @@
 			}
 		},
 		{
-			"includes": ["plugin/src/services/statusParserService.ts"],
+			"includes": [
+				"plugin/src/services/statusParserService.ts",
+				"plugin/src/decorator/claudeStatusDecorator.ts"
+			],
 			"linter": {
 				"rules": {
 					"suspicious": {

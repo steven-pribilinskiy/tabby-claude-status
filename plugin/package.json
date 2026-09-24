@@ -1,6 +1,6 @@
 {
   "name": "tabby-claude-status",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Visual tab indicators (color, emoji, progress, taskbar flash) and multi-backend TTS for Claude Code status inside Tabby terminal",
   "keywords": [
     "tabby-plugin",
@@ -35,6 +35,7 @@
     "build": "rspack build --mode=production",
     "watch": "rspack build --mode=development --watch",
     "typecheck": "tsgo --noEmit",
+    "test": "node --import ./test/register-ts.mjs --test test/*.test.mjs",
     "install-plugin": "npm run build && node scripts/install-plugin.js",
     "prepublishOnly": "npm run build"
   },

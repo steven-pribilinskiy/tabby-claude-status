@@ -14,6 +14,7 @@ import { AudioService } from '../services/audioService'
 import { ClaudeStatusConfigService } from '../services/configService'
 import { ClaudeCrashLogService } from '../services/crashLogService'
 import { SessionRestoreService } from '../services/sessionRestoreService'
+import { SpoolOwnershipService } from '../services/spoolOwnershipService'
 import { StatusActivityLogService } from '../services/statusActivityLogService'
 import { StatusParserService } from '../services/statusParserService'
 import { WindowCoordinatorService } from '../services/windowCoordinatorService'
@@ -108,6 +109,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         private app: AppService,
         private crashLog: ClaudeCrashLogService,
         private windowCoordinator: WindowCoordinatorService,
+        private spoolOwnership: SpoolOwnershipService,
     ) {
         super()
         this.configService.debug('ClaudeStatusDecorator initialized')
@@ -116,6 +118,15 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         // same hook spool dir, so without this each one announces every event
         // and the user hears N copies with N windows open.
         this.windowCoordinator.start()
+
+        // Read the hook spool only while no other app does. It is
+        // consume-and-delete, so two apps reading it (Tabby and Torbie, say)
+        // would each miss the events the other read first. SpoolOwnershipService
+        // decides, and starts and stops the watcher through this.
+        this.spoolOwnership.setConsumer({
+            start: () => this.startFileWatcher(),
+            stop: () => this.stopFileWatcher(),
+        })
 
         // Capture renderer errors/rejections to a persistent log so a future
         // Tabby crash is diagnosable (Tabby's own log.txt is main-process only,
@@ -184,6 +195,12 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
                     } catch {
                         /* shutdown best-effort */
                     }
+                    // A hand-over of Claude events to this window ends with it.
+                    try {
+                        this.spoolOwnership.shutdown()
+                    } catch {
+                        /* shutdown best-effort */
+                    }
                     // Drop our claim file immediately so a sibling window
                     // doesn't wait out the staleness window before taking
                     // over the ownerless-event announcements.
@@ -204,10 +221,9 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         this.terminals.add(terminal)
         this.cacheTerminalPid(terminal)
 
-        // Start file watcher on first terminal
-        if (!this.fileWatcher && !this.pollInterval) {
-            this.startFileWatcher()
-        }
+        // Want the spool from the first terminal on. Whether this window reads
+        // it is SpoolOwnershipService's call: not while another app does.
+        this.spoolOwnership.setWanted(true)
 
         // Also listen for escape sequences (e.g. manual printf testing) and
         // track the terminal's reported cwd (OSC 7 / OSC 1337) for WSL matching.
@@ -253,7 +269,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
         }
 
         if (this.terminals.size === 0) {
-            this.stopFileWatcher()
+            this.spoolOwnership.setWanted(false)
         }
 
         super.detach(terminal)
@@ -281,6 +297,7 @@ export class ClaudeStatusDecorator extends TerminalDecorator {
     // ── File watcher (primary mechanism) ───────────────────────────
 
     private startFileWatcher(): void {
+        if (this.fileWatcher || this.pollInterval) return
         try {
             fs.mkdirSync(STATUS_DIR, { recursive: true })
             this.cleanupSpoolDir()

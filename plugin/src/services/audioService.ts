@@ -185,8 +185,7 @@ export class AudioService {
         // distinct word from questionnaires (AskUserQuestion / ask_user) and
         // idle nudges, even though both share the 'question' visual status.
         // Only the spoken text differs; sound mode keeps the 'question' chime.
-        const isPermission =
-            !isSoundMode && status === 'question' && this.isPermissionEvent(ctx)
+        const isPermission = !isSoundMode && status === 'question' && this.isPermissionEvent(ctx)
         // Static fallback payload — the dynamic path uses this if the LLM
         // call fails or is disabled for the status.
         const staticPayload = isSoundMode

@@ -22,6 +22,8 @@ import {
 } from '../services/piperInstallerService'
 import { SessionRestoreService } from '../services/sessionRestoreService'
 import { type OnlineSoundEntry, type SoundEntry, SoundService } from '../services/soundService'
+import { type AppRef, describeApp, type SpoolView } from '../services/spoolArbitration'
+import { SpoolOwnershipService } from '../services/spoolOwnershipService'
 import {
     type ActivityLogEntry,
     StatusActivityLogService,
@@ -580,6 +582,90 @@ interface BackendOption {
                            (click)="toggleField(config.store.claudeStatus, 'enabled')">
                         Enable plugin
                     </label>
+                </div>
+
+                <hr />
+
+                <!-- Claude events: which app reads the shared hook spool. It is
+                     consume-and-delete, so only one app should; see
+                     SpoolOwnershipService. -->
+                <h5>Claude events</h5>
+                <div [ngSwitch]="spool.mode" style="max-width: 640px">
+                    <p *ngSwitchCase="'off'" class="text-muted small">
+                        This window has no terminal open, so it reads no Claude Code events.
+                    </p>
+                    <p *ngSwitchCase="'waiting'" class="text-muted small">
+                        <i class="fas fa-spinner cs-spin"></i>
+                        Checking whether another app reads Claude Code events…
+                    </p>
+                    <ng-container *ngSwitchCase="'reading'">
+                        <p *ngIf="!spool.sharingWith.length" class="text-muted small">
+                            This window reads Claude Code events.
+                        </p>
+                        <div *ngFor="let app of spool.sharingWith"
+                             class="claude-alert claude-alert-warning mb-3">
+                            <strong [attr.title]="app.exePath">
+                                {{appLabel(app, true)}} is also reading Claude events.
+                            </strong>
+                            Each app plays the sounds and colours the tabs only for the
+                            events it reads first, so both miss some.
+                            <span *ngIf="app.legacy">
+                                It runs a tabby-claude-status older than 1.2.2, which
+                                cannot hand them over.
+                            </span>
+                            <div class="mt-2">
+                                <button class="btn btn-sm btn-secondary"
+                                        (click)="leaveClaudeEventsTo(app)">
+                                    Leave Claude events to {{app.name}}
+                                </button>
+                            </div>
+                        </div>
+                    </ng-container>
+                    <ng-container *ngSwitchCase="'deferring'">
+                        <div *ngIf="spool.deferringTo as reader"
+                             class="claude-alert claude-alert-info mb-3">
+                            <strong [attr.title]="reader.exePath">
+                                Claude events are handled by {{appLabel(reader)}}.
+                            </strong>
+                            This window plays no sounds and colours no tabs for them.
+                            <div *ngIf="!spoolConfirm" class="mt-2">
+                                <button class="btn btn-sm btn-secondary"
+                                        (click)="handleClaudeEventsHere()">
+                                    Handle Claude events in this app
+                                </button>
+                            </div>
+                        </div>
+                    </ng-container>
+                    <div *ngIf="spoolConfirm" class="claude-alert claude-alert-warning mb-3">
+                        <strong>{{appList(spoolConfirm, true)}} cannot hand Claude events over.</strong>
+                        {{spoolConfirm.length > 1 ? 'They run' : 'It runs'}} a
+                        tabby-claude-status older than 1.2.2. Both apps will read Claude
+                        events, each missing the ones the other reads first, until
+                        {{spoolConfirm.length > 1 ? 'they reload' : 'it reloads'}} with the
+                        updated plugin.
+                        <div class="mt-2 d-flex gap-2">
+                            <button class="btn btn-sm btn-warning"
+                                    (click)="handleClaudeEventsHere(true)">
+                                Read Claude events in both apps
+                            </button>
+                            <button class="btn btn-sm btn-secondary" (click)="spoolConfirm = null">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                    <div *ngIf="spoolError" class="claude-alert claude-alert-danger mb-3">
+                        {{spoolError}}
+                    </div>
+                    <div *ngIf="spool.others.length" class="text-muted small">
+                        Other apps with this plugin:
+                        <ul class="mb-0 ps-3">
+                            <li *ngFor="let app of spool.others" [attr.title]="app.exePath">
+                                {{appLabel(app, true)}},
+                                {{app.reading ? 'reading Claude events' : 'not reading Claude events'}}<span
+                                    *ngIf="app.legacy">, on a plugin older than 1.2.2</span>
+                            </li>
+                        </ul>
+                    </div>
                 </div>
 
                 <hr />
@@ -2697,6 +2783,44 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         const m = url.match(/github\.com\/([^/]+)\/([^/#?]+)/)
         return m ? `${m[1]}/${m[2]}` : url
     })()
+    /** Which app reads Claude events, for the General tab. */
+    get spool(): SpoolView {
+        return this.spoolOwnership.view
+    }
+    /** Apps that cannot hand Claude events over, shown before taking them. */
+    spoolConfirm: AppRef[] | null = null
+    spoolError = ''
+
+    appLabel(app: { name: string; pid: number }, opening = false): string {
+        return describeApp(app, opening)
+    }
+
+    /** "Tabby (PID 1) and Torbie (PID 2)". */
+    appList(apps: Array<{ name: string; pid: number }>, opening = false): string {
+        const names = apps.map((app, i) => describeApp(app, opening && i === 0))
+        if (names.length < 2) return names[0] ?? ''
+        return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+    }
+
+    handleClaudeEventsHere(confirmed = false): void {
+        this.spoolError = ''
+        const result = this.spoolOwnership.takeOver(confirmed)
+        if ('confirm' in result) {
+            this.spoolConfirm = result.confirm
+        } else if ('error' in result) {
+            this.spoolError = result.error
+        } else {
+            this.spoolConfirm = null
+        }
+    }
+
+    leaveClaudeEventsTo(app: AppRef): void {
+        this.spoolError = ''
+        this.spoolConfirm = null
+        const result = this.spoolOwnership.leaveTo(app)
+        if ('error' in result) this.spoolError = result.error
+    }
+
     sessions: ClaudeSessionRecord[] = []
     /** Banner shown next to the session list when Resume / Fork fails so
      *  the user gets feedback even when Tabby's NotificationsService
@@ -2902,6 +3026,7 @@ export class ClaudeStatusSettingsTabComponent implements OnInit, OnDestroy, DoCh
         private claudeApi: ClaudeApiService,
         _transcriptReader: TranscriptReaderService,
         private credentialsService: ClaudeCredentialsService,
+        private spoolOwnership: SpoolOwnershipService,
         private hostEl: ElementRef<HTMLElement>,
     ) {}
 

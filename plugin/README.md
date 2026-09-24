@@ -43,6 +43,18 @@ Once enabled:
 
 Under the hood this uses `tabby-local`'s `TerminalService.openTab(undefined, cwd)` + `BaseTerminalTabComponent.sendInput()`.
 
+## Running in two apps at once
+
+The hook spool is consume-and-delete: whichever app reads an event first is the only one that sees it. So when two different apps carry this plugin, Tabby and Torbie say, only one of them reads Claude events. Apps are told apart by executable path, and every window of one app reads them as before.
+
+- An app that finds another app already reading stays out of the spool. It says so in a notification and under **Settings → Claude Status → General → Claude events**, where **Handle Claude events in this app** moves them over. The other app stops, and says where they went.
+- An app that finds another app reading alongside it offers **Leave Claude events to …**, both in the notification (click it) and in Settings.
+- When the app holding the events closes, an app that was leaving them to it starts reading, and says so once.
+
+Versions before 1.2.2 cannot hand the events over. Taking them from such an app asks first, because both apps then read them, each missing some, until it reloads with the update.
+
+The coordination lives in `%TEMP%\tabby-claude-status.windows`: a heartbeat file per window, plus `owner.json` for a hand-over made from Settings.
+
 ## TTS backends
 
 The voice dropdown previously exposed only SAPI 5 voices (David/Mark/Zira) because that's all Chromium's Web Speech API surfaces on Windows. v1.2 introduces a backend picker with four options; Web Speech remains the always-available fallback when the chosen backend fails.

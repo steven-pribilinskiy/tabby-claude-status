@@ -17,6 +17,7 @@ import { MicStateService } from './services/micStateService'
 import { PiperInstallerService } from './services/piperInstallerService'
 import { SessionRestoreService } from './services/sessionRestoreService'
 import { SoundService } from './services/soundService'
+import { SpoolOwnershipService } from './services/spoolOwnershipService'
 import { StatusActivityLogService } from './services/statusActivityLogService'
 import { StatusParserService } from './services/statusParserService'
 import { TranscriptReaderService } from './services/transcriptReaderService'
@@ -41,6 +42,7 @@ import { ZoomStateService } from './services/zoomStateService'
         PiperInstallerService,
         SessionRestoreService,
         WindowCoordinatorService,
+        SpoolOwnershipService,
         { provide: ConfigProvider, useClass: ClaudeStatusConfigProvider, multi: true },
         { provide: TerminalDecorator, useClass: ClaudeStatusDecorator, multi: true },
         { provide: SettingsTabProvider, useClass: ClaudeStatusSettingsTabProvider, multi: true },
